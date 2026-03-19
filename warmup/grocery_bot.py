@@ -35,9 +35,13 @@ except ImportError:
 # Pathfinding
 # ============================================================
 
-def bfs(start: tuple, goal: tuple, walls: set, width: int, height: int,
+def bfs(start: tuple, goal: tuple, blocked: set, width: int, height: int,
         reserved: set = None) -> list[tuple]:
-    """BFS shortest path from start to goal, avoiding walls and reserved cells."""
+    """BFS shortest path from start to goal, avoiding blocked cells and reserved cells.
+
+    The goal cell itself is allowed even if in blocked set (for adjacency-based pickup,
+    we path to an adjacent cell instead).
+    """
     if start == goal:
         return [start]
 
@@ -50,8 +54,8 @@ def bfs(start: tuple, goal: tuple, walls: set, width: int, height: int,
             nx, ny = pos[0] + dx, pos[1] + dy
             npos = (nx, ny)
             if (0 <= nx < width and 0 <= ny < height
-                    and npos not in walls
                     and npos not in visited
+                    and (npos not in blocked or npos == goal)
                     and (reserved is None or npos not in reserved)):
                 if npos == goal:
                     return path + [npos]
@@ -60,8 +64,37 @@ def bfs(start: tuple, goal: tuple, walls: set, width: int, height: int,
 
     # No path found — try without reservations
     if reserved:
-        return bfs(start, goal, walls, width, height, reserved=None)
+        return bfs(start, goal, blocked, width, height, reserved=None)
     return [start]  # stuck
+
+
+def bfs_to_adjacent(start: tuple, target: tuple, blocked: set, width: int, height: int,
+                    reserved: set = None) -> list[tuple]:
+    """BFS to a cell adjacent to target (for picking up items on shelves/walls)."""
+    # Find walkable cells adjacent to target
+    adj_cells = []
+    for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+        nx, ny = target[0] + dx, target[1] + dy
+        npos = (nx, ny)
+        if (0 <= nx < width and 0 <= ny < height and npos not in blocked):
+            adj_cells.append(npos)
+
+    if not adj_cells:
+        return [start]
+
+    # If already adjacent, done
+    if start in adj_cells:
+        return [start]
+
+    # BFS to closest adjacent cell
+    best_path = None
+    for adj in adj_cells:
+        path = bfs(start, adj, blocked, width, height, reserved)
+        if len(path) > 1 or path[0] == adj:
+            if best_path is None or len(path) < len(best_path):
+                best_path = path
+
+    return best_path if best_path else [start]
 
 
 def manhattan(a: tuple, b: tuple) -> int:
@@ -131,33 +164,57 @@ class GroceryAgent:
         self.walls: set = set()
         self.width: int = 0
         self.height: int = 0
-        self.path_cache: dict = {}
         self.round_num: int = 0
 
     def update_grid(self, grid: dict):
         self.width = grid.get("width", 0)
         self.height = grid.get("height", 0)
         self.walls = set(tuple(w) for w in grid.get("walls", []))
-        self.path_cache.clear()
 
-    def get_needed_items(self, orders: list, items: list) -> list:
-        """Get items that are needed for active orders, sorted by priority."""
-        needed_types = set()
+    def get_blocked(self, items: list, bot_positions: set) -> set:
+        """Build full blocked set: walls + item positions + other bot positions."""
+        blocked = set(self.walls)
+        for item in items:
+            blocked.add(tuple(item.get("position", [0, 0])))
+        blocked |= bot_positions
+        return blocked
+
+    def get_needed_items(self, orders: list, items: list, bot_inventories: dict) -> list:
+        """Get items needed for active orders, accounting for what bots already carry."""
+        needed_counts = {}
         for order in orders:
             if order.get("complete") or order.get("status") != "active":
                 continue
-            required = set(order.get("items_required", []))
-            delivered = set(order.get("items_delivered", []))
-            for item_type in required - delivered:
-                needed_types.add(item_type)
+            required = order.get("items_required", [])
+            delivered = order.get("items_delivered", [])
+            # Count remaining needed per type
+            from collections import Counter
+            req_counts = Counter(required)
+            del_counts = Counter(delivered)
+            for item_type, count in req_counts.items():
+                remaining = count - del_counts.get(item_type, 0)
+                if remaining > 0:
+                    needed_counts[item_type] = needed_counts.get(item_type, 0) + remaining
 
-        # Filter available items to those needed
-        needed_items = [i for i in items if i.get("type") in needed_types]
+        # Subtract items already in bot inventories
+        for bot_id, inv in bot_inventories.items():
+            for item_type in inv:
+                if item_type in needed_counts:
+                    needed_counts[item_type] = max(0, needed_counts[item_type] - 1)
 
-        # If no needed items, return all items (speculative picking)
-        if not needed_items:
-            return items
+        # Filter items to those still needed
+        needed_items = []
+        type_taken = {}
+        for item in items:
+            itype = item.get("type")
+            if itype in needed_counts and needed_counts[itype] > type_taken.get(itype, 0):
+                needed_items.append(item)
+                type_taken[itype] = type_taken.get(itype, 0) + 1
+
         return needed_items
+
+    def is_adjacent(self, pos: tuple, target: tuple) -> bool:
+        return manhattan(pos, target) == 1
 
     def decide(self, state: dict) -> dict:
         """Main decision function — returns actions for all bots."""
@@ -180,11 +237,17 @@ class GroceryAgent:
         else:
             drop_offs = []
 
-        # Track which cells are reserved this round
+        # Build bot position set and inventory map
+        bot_positions = set(tuple(b["position"]) for b in bots)
+        bot_inventories = {b["id"]: b.get("inventory", []) for b in bots}
+
+        # Blocked = walls + items (items block movement)
+        blocked = self.get_blocked(items, set())  # don't block on bot positions for BFS
+
         reserved = set()
         actions = []
 
-        # Separate bots: those with inventory → go drop off, those without → go pick up
+        # Separate bots by state
         bots_to_pickup = []
         bots_to_dropoff = []
 
@@ -199,7 +262,6 @@ class GroceryAgent:
         for bot in bots_to_dropoff:
             bpos = tuple(bot["position"])
 
-            # Find closest drop-off
             if drop_offs:
                 closest_drop = min(drop_offs, key=lambda d: manhattan(bpos, d))
             else:
@@ -209,7 +271,7 @@ class GroceryAgent:
             if bpos == closest_drop:
                 actions.append({"bot": bot["id"], "action": "drop_off"})
             else:
-                path = bfs(bpos, closest_drop, self.walls, self.width, self.height, reserved)
+                path = bfs(bpos, closest_drop, blocked, self.width, self.height, reserved)
                 if len(path) > 1:
                     next_pos = path[1]
                     reserved.add(next_pos)
@@ -218,16 +280,15 @@ class GroceryAgent:
                     actions.append({"bot": bot["id"], "action": "wait"})
 
         # --- Bots picking up items ---
-        needed_items = self.get_needed_items(orders, items)
+        needed_items = self.get_needed_items(orders, items, bot_inventories)
 
         if bots_to_pickup and needed_items:
-            # Build target list with positions
             targets = [{"id": i.get("id"), "type": i.get("type"),
                         "position": i.get("position", [0, 0])}
                        for i in needed_items]
 
             assignment = assign_bots_to_targets(bots_to_pickup, targets,
-                                                 self.walls, self.width, self.height)
+                                                 blocked, self.width, self.height)
 
             for bot in bots_to_pickup:
                 bpos = tuple(bot["position"])
@@ -239,11 +300,13 @@ class GroceryAgent:
 
                 tpos = tuple(target["position"])
 
-                if bpos == tpos:
+                # If adjacent to item, pick it up
+                if self.is_adjacent(bpos, tpos):
                     actions.append({"bot": bot["id"], "action": "pick_up",
                                     "item_id": target["id"]})
                 else:
-                    path = bfs(bpos, tpos, self.walls, self.width, self.height, reserved)
+                    # Path to adjacent cell (items are on shelves/walls, can't walk on them)
+                    path = bfs_to_adjacent(bpos, tpos, blocked, self.width, self.height, reserved)
                     if len(path) > 1:
                         next_pos = path[1]
                         reserved.add(next_pos)
