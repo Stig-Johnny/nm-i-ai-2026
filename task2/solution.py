@@ -80,24 +80,28 @@ Output ONLY valid JSON, no markdown, no explanation.
 """
 
 def parse_prompt_with_llm(prompt, file_texts):
-    # Use claude via subprocess (Claude Code subscription)
     full_prompt = prompt
     if file_texts:
         full_prompt += "\n\nAttached files:\n" + "\n".join(file_texts)
     
+    # Use claude CLI (Claude Code subscription — no API key needed)
     try:
-        import anthropic
-        client = anthropic.Anthropic()
-        msg = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": full_prompt}]
+        result = subprocess.run(
+            ["/Users/claude/.local/bin/claude", "-p", SYSTEM_PROMPT],
+            input=full_prompt,
+            capture_output=True, text=True, timeout=60
         )
-        return json.loads(msg.content[0].text)
+        raw = result.stdout.strip()
+        # Strip markdown fences if present
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw.strip())
     except Exception as e:
-        print(f"LLM error: {e}")
-        return None
+        print(f"claude CLI error: {e}, stdout: {result.stdout[:200] if 'result' in dir() else ''}")
+        # Fallback: simple keyword parser
+        return simple_parse(prompt)
 
 # ============================================================
 # Task executor
@@ -326,6 +330,43 @@ def register_payment(base_url, token, e):
     })
     print(f"register_payment: {status} {str(resp)[:200]}")
     return status in (200, 201)
+
+
+def simple_parse(prompt):
+    p = prompt.lower()
+    entities = {}
+    
+    # Extract names (look for patterns)
+    import re
+    # Name patterns
+    name_match = re.search(r'navn\s+([A-ZÆØÅ][a-zæøå]+(?:\s+[A-ZÆØÅ][a-zæøå]+)*)', prompt)
+    if name_match:
+        parts = name_match.group(1).split()
+        entities["firstName"] = parts[0]
+        entities["lastName"] = " ".join(parts[1:]) if len(parts) > 1 else ""
+    
+    email_match = re.search(r'[\w.+-]+@[\w.-]+\.\w+', prompt)
+    if email_match:
+        entities["email"] = email_match.group(0)
+    
+    entities["administrator"] = any(w in p for w in ["administrator", "admin", "kontoadministrator"])
+    
+    # Task type detection
+    if any(w in p for w in ["ansatt", "employee", "medarbeider"]):
+        return {"task_type": "create_employee", "entities": entities, "steps": []}
+    if any(w in p for w in ["kunde", "customer", "klient"]):
+        return {"task_type": "create_customer", "entities": entities, "steps": []}
+    if any(w in p for w in ["faktura", "invoice"]):
+        return {"task_type": "create_invoice", "entities": entities, "steps": []}
+    if any(w in p for w in ["prosjekt", "project"]):
+        return {"task_type": "create_project", "entities": entities, "steps": []}
+    if any(w in p for w in ["avdeling", "department"]):
+        return {"task_type": "create_department", "entities": entities, "steps": []}
+    if any(w in p for w in ["reiseregning", "travel expense", "reise"]):
+        return {"task_type": "create_travel_expense", "entities": entities, "steps": []}
+    if any(w in p for w in ["produkt", "product", "vare"]):
+        return {"task_type": "create_product", "entities": entities, "steps": []}
+    return {"task_type": "unknown", "entities": entities, "steps": []}
 
 
 def generic_handler(base_url, token, plan, prompt):
