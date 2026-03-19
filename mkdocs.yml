@@ -55,6 +55,7 @@ nav:
   - Strategy:
     - Overview: strategy/overview.md
     - Coding Patterns: strategy/coding-patterns.md
+    - Astar Island Mechanics: strategy/astar-island-mechanics.md
   - Tasks:
     - Grocery Bot: tasks/task1.md
     - Tripletex: tasks/task2.md
