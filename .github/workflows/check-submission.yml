@@ -16,6 +16,8 @@ jobs:
           FAILED=0
           for f in task4/*.py; do
             [ -f "$f" ] || continue
+            # Skip training scripts — they run locally, never submitted
+            case "$f" in *train*) echo "Skipping $f (training script)"; continue;; esac
             echo "Checking $f..."
             while IFS= read -r line; do
               [[ "$line" =~ ^[[:space:]]*# ]] && continue
@@ -35,4 +37,4 @@ jobs:
             echo "⛔ Submission contains banned imports — fix before submitting"
             exit 1
           fi
-          echo "✅ All Python files clean"
+          echo "✅ All submission files clean"
