@@ -90,9 +90,9 @@ This has critical implications:
 
 ### No GPU Strategy
 
-We have zero GPU access. Every approach must be:
+We have zero GPU access. We use **Claude Code subscription** (not API). Every approach must be:
 
-1. **API-based** — Claude Haiku (fast, cheap), OpenAI GPT-4o-mini
+1. **Claude Code native** — use Claude's reasoning directly for LLM tasks
 2. **CPU-optimized** — ONNX Runtime, quantized models, sklearn/XGBoost
 3. **Pre-trained** — No fine-tuning, use zero-shot or few-shot
 
@@ -100,8 +100,8 @@ We have zero GPU access. Every approach must be:
 
 | Task Type | Primary Approach | Fallback |
 |-----------|-----------------|----------|
-| **Computer Vision** | CLIP zero-shot / EfficientNet-B0 ONNX | Claude vision API (slower, costs $) |
-| **Language Model** | Claude Haiku API (3ms latency) | Local small LLM via llama.cpp |
+| **Computer Vision** | CLIP zero-shot / EfficientNet-B0 | Claude vision (via Claude Code) |
+| **Language Model** | Claude Code direct reasoning | Sub-agent spawning |
 | **Machine Learning** | XGBoost + Optuna auto-tuning | sklearn ensemble (RF + GBM + LR) |
 | **WebSocket Game** | A* + Hungarian assignment (from warm-up) | BFS greedy |
 | **Optimization** | scipy.optimize / OR-tools | Greedy heuristic |

@@ -42,7 +42,7 @@ import json
 import sys
 
 # === Config ===
-# Constants, model paths, API keys at the top
+# Constants, model paths at the top
 
 # === Core Logic ===
 def solve(state: dict) -> dict:
@@ -126,43 +126,23 @@ Currently installed:
 - `websockets`, `aiohttp` — networking
 - `numpy`, `scipy` — math
 - `torch`, `torchvision` — CV models
-- `anthropic`, `openai` — LLM APIs
 - `scikit-learn`, `xgboost`, `pandas` — ML
 - `optuna` — hyperparameter tuning
 - `requests` — HTTP
-- `python-dotenv` — env vars
 
 Add new deps with `pip install X && pip freeze | grep X >> requirements.txt`.
 
-## API Keys
+## LLM Access
 
-Stored in `.env` (gitignored):
+We use **Claude Code subscription** (not API keys). For LLM tasks, Claude reasons directly within the agent — no SDK calls needed.
 
-```
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-```
-
-Load with:
-```python
-from dotenv import load_dotenv
-load_dotenv()
-import os
-key = os.environ["ANTHROPIC_API_KEY"]
-```
+If a task requires programmatic LLM calls at scale, we use Claude Code's built-in tools or spawn sub-agents.
 
 ## Error Handling
 
-Minimal during competition. Wrap only external calls:
+Minimal during competition:
 
 ```python
-# YES - wrap API calls
-try:
-    resp = client.messages.create(...)
-except Exception as e:
-    print(f"API error: {e}")
-    return fallback_answer()
-
 # NO - don't wrap internal logic
 # If it crashes, we want to see the traceback
 ```

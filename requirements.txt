@@ -2,15 +2,11 @@ websockets>=12.0
 aiohttp>=3.9
 numpy>=1.26
 requests>=2.31
-python-dotenv>=1.0
 # CV
 Pillow>=10.0
 torch>=2.0; sys_platform != "darwin" or platform_machine != "arm64"
 torch>=2.0; sys_platform == "darwin" and platform_machine == "arm64"
 torchvision>=0.15
-# LLM
-anthropic>=0.25
-openai>=1.0
 # ML
 scikit-learn>=1.4
 xgboost>=2.0
