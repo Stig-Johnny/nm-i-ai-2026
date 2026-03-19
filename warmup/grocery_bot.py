@@ -180,15 +180,18 @@ class GroceryAgent:
         return blocked
 
     def get_needed_items(self, orders: list, items: list, bot_inventories: dict) -> list:
-        """Get items needed for active orders, accounting for what bots already carry."""
+        """Get items needed for active+preview orders, accounting for what bots already carry."""
+        from collections import Counter
         needed_counts = {}
+        # Include active AND preview orders so bots pre-fetch for next order
         for order in orders:
-            if order.get("complete") or order.get("status") != "active":
+            if order.get("complete"):
+                continue
+            status = order.get("status")
+            if status not in ("active", "preview"):
                 continue
             required = order.get("items_required", [])
             delivered = order.get("items_delivered", [])
-            # Count remaining needed per type
-            from collections import Counter
             req_counts = Counter(required)
             del_counts = Counter(delivered)
             for item_type, count in req_counts.items():
@@ -213,8 +216,137 @@ class GroceryAgent:
 
         return needed_items
 
+    def _active_order(self, orders: list):
+        return next((o for o in orders if o.get("status") == "active" and not o.get("complete")), None)
+
+    def _inv_useful(self, order, inventory: list) -> int:
+        """Count items in inventory that can be delivered to this order right now."""
+        if not order:
+            return 0
+        needed = list(order.get("items_required", []))
+        for d in order.get("items_delivered", []):
+            if d in needed:
+                needed.remove(d)
+        count = 0
+        inv = list(inventory)
+        for t in needed:
+            if t in inv:
+                count += 1
+                inv.remove(t)
+        return count
+
     def is_adjacent(self, pos: tuple, target: tuple) -> bool:
         return manhattan(pos, target) == 1
+
+    def _to_pick(self, active, preview, inventory: list) -> list:
+        """Types still needed — active first, preview fills spare slots. Never over-picks."""
+        inv = list(inventory)
+        result = []
+
+        if active:
+            needed = list(active.get("items_required", []))
+            for d in active.get("items_delivered", []):
+                if d in needed: needed.remove(d)
+            for t in needed:
+                if t in inv:
+                    inv.remove(t)
+                else:
+                    result.append(t)
+
+        slots_left = 3 - len(inventory) - len(result)
+        if preview and slots_left > 0:
+            needed = list(preview.get("items_required", []))
+            for d in preview.get("items_delivered", []):
+                if d in needed: needed.remove(d)
+            for t in needed:
+                if slots_left <= 0: break
+                if t in inv:
+                    inv.remove(t)
+                else:
+                    result.append(t)
+                    slots_left -= 1
+
+        return result
+
+    def _plan_bot(self, bot, state, blocked, assigned_ids, reserved):
+        """Plan one bot. Returns action dict."""
+        bid  = bot["id"]
+        pos  = tuple(bot["position"])
+        inv  = list(bot["inventory"])
+
+        orders = state.get("orders", [])
+        items  = state.get("items", [])
+        drop   = tuple(state.get("drop_off") or (state.get("drop_off_zones") or [[]])[0])
+
+        active  = next((o for o in orders if o.get("status")=="active"  and not o.get("complete")), None)
+        preview = next((o for o in orders if o.get("status")=="preview" and not o.get("complete")), None)
+
+        useful = self._inv_useful(active, inv)
+        want   = self._to_pick(active, preview, inv)
+        full   = len(inv) >= 3
+
+        def go(target_pos):
+            path = bfs(pos, target_pos, blocked, self.width, self.height, reserved)
+            if len(path) > 1:
+                nxt = path[1]
+                reserved.add(nxt)
+                return {"bot": bid, "action": direction_from_move(pos, nxt)}
+            reserved.add(pos)
+            return {"bot": bid, "action": "wait"}
+
+        def go_adj(target_pos):
+            path = bfs_to_adjacent(pos, target_pos, blocked, self.width, self.height, reserved)
+            if len(path) > 1:
+                nxt = path[1]
+                reserved.add(nxt)
+                return {"bot": bid, "action": direction_from_move(pos, nxt)}
+            reserved.add(pos)
+            return {"bot": bid, "action": "wait"}
+
+        # 1. At drop-off with useful items → deliver
+        if pos == drop and useful > 0:
+            reserved.add(pos)
+            return {"bot": bid, "action": "drop_off"}
+
+        # 2. Inventory full OR nothing left to pick → deliver
+        if useful > 0 and (full or not want):
+            if pos == drop:
+                reserved.add(pos)
+                return {"bot": bid, "action": "drop_off"}
+            return go(drop)
+
+        # 3. Adjacent wanted item → pick up immediately
+        if len(inv) < 3 and want:
+            for it in items:
+                if it["id"] in assigned_ids: continue
+                ip = tuple(it["position"])
+                if manhattan(pos, ip) != 1: continue
+                if it["type"] in want:
+                    assigned_ids.add(it["id"])
+                    reserved.add(pos)
+                    return {"bot": bid, "action": "pick_up", "item_id": it["id"]}
+
+        # 4. Move toward nearest wanted item
+        if len(inv) < 3 and want:
+            for typ in want:
+                cands = [it for it in items if it["type"] == typ and it["id"] not in assigned_ids]
+                if not cands:
+                    cands = [it for it in items if it["type"] == typ]
+                if cands:
+                    cands.sort(key=lambda x: manhattan(pos, tuple(x["position"])))
+                    tgt = cands[0]
+                    assigned_ids.add(tgt["id"])
+                    return go_adj(tuple(tgt["position"]))
+
+        # 5. Fallback: deliver if anything useful
+        if useful > 0:
+            if pos == drop:
+                reserved.add(pos)
+                return {"bot": bid, "action": "drop_off"}
+            return go(drop)
+
+        reserved.add(pos)
+        return {"bot": bid, "action": "wait"}
 
     def decide(self, state: dict) -> dict:
         """Main decision function — returns actions for all bots."""
@@ -224,99 +356,18 @@ class GroceryAgent:
         if grid:
             self.update_grid(grid)
 
-        bots = state.get("bots", [])
+        bots  = state.get("bots", [])
         items = state.get("items", [])
-        orders = state.get("orders", [])
-        drop_off = state.get("drop_off")
-        drop_off_zones = state.get("drop_off_zones", [])
 
-        if drop_off:
-            drop_offs = [tuple(drop_off)]
-        elif drop_off_zones:
-            drop_offs = [tuple(z) for z in drop_off_zones]
-        else:
-            drop_offs = []
+        # impassable = walls + all item positions
+        blocked  = self.walls | set(tuple(it["position"]) for it in items)
+        reserved = set(tuple(b["position"]) for b in bots)  # pre-reserve current positions
 
-        # Build bot position set and inventory map
-        bot_positions = set(tuple(b["position"]) for b in bots)
-        bot_inventories = {b["id"]: b.get("inventory", []) for b in bots}
-
-        # Blocked = walls + items (items block movement)
-        blocked = self.get_blocked(items, set())  # don't block on bot positions for BFS
-
-        reserved = set()
+        assigned_ids = set()
         actions = []
-
-        # Separate bots by state
-        bots_to_pickup = []
-        bots_to_dropoff = []
-
-        for bot in bots:
-            inventory = bot.get("inventory", [])
-            if len(inventory) > 0:
-                bots_to_dropoff.append(bot)
-            else:
-                bots_to_pickup.append(bot)
-
-        # --- Bots heading to drop-off ---
-        for bot in bots_to_dropoff:
-            bpos = tuple(bot["position"])
-
-            if drop_offs:
-                closest_drop = min(drop_offs, key=lambda d: manhattan(bpos, d))
-            else:
-                actions.append({"bot": bot["id"], "action": "wait"})
-                continue
-
-            if bpos == closest_drop:
-                actions.append({"bot": bot["id"], "action": "drop_off"})
-            else:
-                path = bfs(bpos, closest_drop, blocked, self.width, self.height, reserved)
-                if len(path) > 1:
-                    next_pos = path[1]
-                    reserved.add(next_pos)
-                    actions.append({"bot": bot["id"], "action": direction_from_move(bpos, next_pos)})
-                else:
-                    actions.append({"bot": bot["id"], "action": "wait"})
-
-        # --- Bots picking up items ---
-        needed_items = self.get_needed_items(orders, items, bot_inventories)
-
-        if bots_to_pickup and needed_items:
-            targets = [{"id": i.get("id"), "type": i.get("type"),
-                        "position": i.get("position", [0, 0])}
-                       for i in needed_items]
-
-            assignment = assign_bots_to_targets(bots_to_pickup, targets,
-                                                 blocked, self.width, self.height)
-
-            for bot in bots_to_pickup:
-                bpos = tuple(bot["position"])
-                target = assignment.get(bot["id"])
-
-                if target is None:
-                    actions.append({"bot": bot["id"], "action": "wait"})
-                    continue
-
-                tpos = tuple(target["position"])
-
-                # If adjacent to item, pick it up
-                if self.is_adjacent(bpos, tpos):
-                    actions.append({"bot": bot["id"], "action": "pick_up",
-                                    "item_id": target["id"]})
-                else:
-                    # Path to adjacent cell (items are on shelves/walls, can't walk on them)
-                    path = bfs_to_adjacent(bpos, tpos, blocked, self.width, self.height, reserved)
-                    if len(path) > 1:
-                        next_pos = path[1]
-                        reserved.add(next_pos)
-                        actions.append({"bot": bot["id"],
-                                        "action": direction_from_move(bpos, next_pos)})
-                    else:
-                        actions.append({"bot": bot["id"], "action": "wait"})
-        else:
-            for bot in bots_to_pickup:
-                actions.append({"bot": bot["id"], "action": "wait"})
+        for bot in sorted(bots, key=lambda b: b["id"]):
+            a = self._plan_bot(bot, state, blocked, assigned_ids, reserved)
+            actions.append(a)
 
         return {"actions": actions}
 
