@@ -153,69 +153,89 @@ def initial_grid_to_priors(grid):
                     return True
         return False
 
+    # Precompute distance to nearest settlement for each cell
+    dist_to_settlement = {}
+    for y in range(H):
+        for x in range(W):
+            d = min((abs(y-sy)+abs(x-sx) for sy, sx in settlement_positions), default=99)
+            dist_to_settlement[(y, x)] = d
+
     for y in range(H):
         for x in range(W):
             raw = grid[y][x]
+            dist = dist_to_settlement[(y, x)]
+            coastal = near_ocean(y, x)
 
-            if raw == 10:  # Ocean — never changes
+            if raw == 10:  # Ocean — static (100% Empty)
                 priors[y][x][0] = 0.98
-            elif raw == 5:  # Mountain — never changes
+            elif raw == 5:  # Mountain — static (100% Mountain)
                 priors[y][x][5] = 0.98
             elif raw == 4:  # Forest
-                if near_settlement(y, x, 2):
-                    # Forest near settlement can be cleared
-                    priors[y][x][4] = 0.50
-                    priors[y][x][1] = 0.15
-                    priors[y][x][0] = 0.15
-                    priors[y][x][3] = 0.05
+                # Calibrated from Round 1 ground truth data
+                if dist <= 2:
+                    if coastal:
+                        # Forest adj coastal: 62% F, 15% S, 15% P, 5% E
+                        priors[y][x] = [0.050, 0.150, 0.148, 0.01, 0.617, 0.01]
+                    else:
+                        # Forest adj inland: 65% F, 23% S, 10% E
+                        priors[y][x] = [0.101, 0.232, 0.01, 0.01, 0.650, 0.01]
+                elif dist <= 5:
+                    if coastal:
+                        # Forest near coastal: 73% F, 11% P, 10% S
+                        priors[y][x] = [0.040, 0.100, 0.108, 0.01, 0.732, 0.01]
+                    else:
+                        # Forest near inland: 73% F, 18% S, 8% E
+                        priors[y][x] = [0.082, 0.178, 0.01, 0.01, 0.725, 0.01]
+                elif dist <= 8:
+                    # Forest medium distance: 92% F (coastal or inland similar)
+                    priors[y][x][4] = 0.92
+                    priors[y][x][0] = 0.04
                 else:
-                    priors[y][x][4] = 0.80
-                    priors[y][x][0] = 0.08
+                    # Forest far: ~100% F
+                    priors[y][x][4] = 0.98
             elif raw == 11:  # Plains
-                if near_settlement(y, x, 2):
-                    # Plains near settlement — likely to be settled
-                    priors[y][x][0] = 0.25
-                    priors[y][x][1] = 0.25
-                    priors[y][x][4] = 0.15
-                    priors[y][x][3] = 0.10
-                    priors[y][x][2] = 0.05 if near_ocean(y, x) else 0.01
+                # Calibrated from Round 1 ground truth data
+                if dist <= 2:
+                    if coastal:
+                        # Plains adj coastal: 66% E, 15% P, 14% S
+                        priors[y][x] = [0.664, 0.143, 0.145, 0.01, 0.028, 0.01]
+                    else:
+                        # Plains adj inland: 71% E, 23% S, 5% F
+                        priors[y][x] = [0.711, 0.226, 0.01, 0.01, 0.047, 0.01]
+                elif dist <= 5:
+                    if coastal:
+                        # Plains near coastal: 77% E, 10% P, 9% S
+                        priors[y][x] = [0.773, 0.090, 0.101, 0.01, 0.016, 0.01]
+                    else:
+                        # Plains near inland: 77% E, 18% S, 4% F
+                        priors[y][x] = [0.771, 0.175, 0.01, 0.01, 0.039, 0.01]
+                elif dist <= 8:
+                    if coastal:
+                        # Plains medium coastal: 93% E, 4% S, 3% P
+                        priors[y][x] = [0.925, 0.037, 0.028, 0.01, 0.01, 0.01]
+                    else:
+                        # Plains medium inland: 93% E, 6% S
+                        priors[y][x] = [0.933, 0.057, 0.01, 0.01, 0.006, 0.01]
                 else:
-                    priors[y][x][0] = 0.50
-                    priors[y][x][4] = 0.25
-                    priors[y][x][1] = 0.05
+                    # Plains far: ~100% E
+                    priors[y][x][0] = 0.98
             elif raw == 1:  # Settlement
-                if near_ocean(y, x):
-                    # Coastal settlement — can become port
-                    priors[y][x][1] = 0.25
-                    priors[y][x][2] = 0.25
-                    priors[y][x][3] = 0.20
-                    priors[y][x][0] = 0.10
+                # Calibrated: 41% S, 37% E, 18% F, 3% Ruin (coastal: 35% S, 33% E, 15% F, 15% P)
+                if coastal:
+                    priors[y][x] = [0.328, 0.349, 0.100, 0.02, 0.150, 0.01]
                 else:
-                    priors[y][x][1] = 0.35
-                    priors[y][x][3] = 0.25
-                    priors[y][x][0] = 0.15
-                    priors[y][x][2] = 0.02
-            elif raw == 2:  # Port
-                priors[y][x][2] = 0.35
-                priors[y][x][1] = 0.15
-                priors[y][x][3] = 0.20
-                priors[y][x][0] = 0.10
-            elif raw == 3:  # Ruin
-                if near_settlement(y, x, 3):
-                    # Ruin near settlement — can be reclaimed
-                    priors[y][x][3] = 0.25
-                    priors[y][x][1] = 0.25
-                    priors[y][x][0] = 0.15
-                    priors[y][x][4] = 0.10
-                    priors[y][x][2] = 0.05 if near_ocean(y, x) else 0.01
+                    priors[y][x] = [0.373, 0.414, 0.01, 0.031, 0.182, 0.01]
+            elif raw == 2:  # Port (n=7 only — limited data)
+                # Calibrated: 36% E, 32% P, 18% F, 12% S
+                priors[y][x] = [0.364, 0.120, 0.319, 0.021, 0.176, 0.01]
+            elif raw == 3:  # Ruin — no data in Round 1, use conservative heuristic
+                if dist <= 3:
+                    priors[y][x] = [0.25, 0.25, 0.01, 0.20, 0.28, 0.01]
                 else:
-                    # Isolated ruin — becomes forest or plains
-                    priors[y][x][3] = 0.25
-                    priors[y][x][4] = 0.30
-                    priors[y][x][0] = 0.25
+                    priors[y][x] = [0.30, 0.10, 0.01, 0.25, 0.33, 0.01]
             elif raw == 0:  # Empty
-                priors[y][x][0] = 0.70
-                priors[y][x][4] = 0.10
+                priors[y][x][0] = 0.90
+                priors[y][x][4] = 0.05
             else:
                 priors[y][x][TERRAIN_TO_CLASS.get(raw, 0)] = 0.50
 
