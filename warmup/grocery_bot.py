@@ -50,27 +50,36 @@ def heuristic(a, b):
 
 
 def astar(start, goal, impass, width, height, reserved=None):
-    """A* from start to goal. impass = frozenset of blocked cells. Returns first action or None."""
+    """A* from start to goal. Returns first action, or None if already there.
+    If path is fully blocked by reservations, retries without reservation constraint
+    (temporary deadlock resolution — bot takes any available step toward goal).
+    """
     s, g = tuple(start), tuple(goal)
     if s == g: return None
-    bl = reserved or set()
-    open_set = [(heuristic(s,g), 0, s, None)]
-    visited = {}
-    while open_set:
-        f, gc, pos, first = heapq.heappop(open_set)
-        if pos in visited: continue
-        visited[pos] = True
-        for act,(dx,dy) in DIRS:
-            n = (pos[0]+dx, pos[1]+dy)
-            if not (0 <= n[0] < width and 0 <= n[1] < height): continue
-            if n in impass: continue
-            if n in visited: continue
-            mv = first or act
-            ng = gc + 1
-            if n == g: return mv
-            if n not in bl:
-                heapq.heappush(open_set, (ng + heuristic(n,g), ng, n, mv))
-    return "wait"
+
+    def _search(bl):
+        open_set = [(heuristic(s,g), 0, s, None)]
+        visited = {}
+        while open_set:
+            f, gc, pos, first = heapq.heappop(open_set)
+            if pos in visited: continue
+            visited[pos] = True
+            for act,(dx,dy) in DIRS:
+                n = (pos[0]+dx, pos[1]+dy)
+                if not (0 <= n[0] < width and 0 <= n[1] < height): continue
+                if n in impass: continue
+                if n in visited: continue
+                mv = first or act
+                ng = gc + 1
+                if n == g: return mv
+                if n not in bl:
+                    heapq.heappush(open_set, (ng + heuristic(n,g), ng, n, mv))
+        return None
+
+    result = _search(reserved or set())
+    if result is not None: return result
+    # Deadlock: retry without reservations (yield to blockers next round)
+    return _search(set()) or "wait"
 
 
 def best_approach_cell(bot_pos, item_pos, walls, item_set, width, height):
@@ -130,22 +139,32 @@ def inv_useful_count(order, inventory):
     return count
 
 
-def types_to_pick(active, preview, inventory):
+def types_to_pick(active, preview, inventory, global_carried=None):
     """
-    Types still needed — active first, preview fills spare slots (max 1 preview item).
-    Never over-picks: active items take priority, preview only fills last slot.
+    Types still needed — active first, preview fills last slot.
+    `global_carried`: Counter of types already carried by ALL bots (including this one).
+    Prevents over-picking: if enough of a type is already being carried fleet-wide, skip it.
     """
+    from collections import Counter
+    carried = Counter(global_carried or {})
     inv = list(inventory)
     result = []
 
     if active:
-        for t in order_remaining_types(active):
+        needed = order_remaining_types(active)
+        needed_ctr = Counter(needed)
+        for t in needed:
+            # Skip if enough already carried fleet-wide (avoid duplicate pickup)
+            if carried[t] >= needed_ctr[t]:
+                continue
             if t in inv:
                 inv.remove(t)
+                # This bot already has it — don't reduce demand for other bots
             else:
                 result.append(t)
+                carried[t] += 1  # claim this slot fleet-wide
 
-    # Preview: only fill the last slot, only if we'd have space after all active items
+    # Preview: only fill last slot if there's room after active items
     slots_left = 3 - len(inventory) - len(result)
     if preview and slots_left > 0:
         for t in order_remaining_types(preview):
@@ -211,7 +230,7 @@ def plan_bot(bot, state, walls, item_set, impass, assigned_ids, reserved):
     preview = next((o for o in orders if o.get("status")=="preview" and not o.get("complete")), None)
 
     useful = inv_useful_count(active, inv)
-    want   = types_to_pick(active, preview, inv)
+    want   = types_to_pick(active, preview, inv, state.get("_global_carried"))
     full   = len(inv) >= 3
 
     def go(target):
@@ -236,8 +255,20 @@ def plan_bot(bot, state, walls, item_set, impass, assigned_ids, reserved):
         reserved.add(pos)
         return {"bot": bid, "action": "drop_off"}
 
-    # 2. Inventory full OR nothing left to pick → deliver
-    if useful > 0 and (full or not want):
+    # 2. Inventory full OR nothing left to pick OR drop is closer than nearest item → deliver
+    def nearest_item_dist():
+        if not want: return 9999
+        best = 9999
+        want_set = set(want)
+        for it in items:
+            if it["type"] not in want_set: continue
+            app = best_approach_cell(pos, tuple(it["position"]), walls, item_set, W, H)
+            if app: best = min(best, manhattan(pos, app))
+        return best
+
+    drop_dist = manhattan(pos, drop)
+    should_deliver = useful > 0 and (full or not want or drop_dist <= nearest_item_dist())
+    if should_deliver:
         if pos == drop:
             reserved.add(pos)
             return {"bot": bid, "action": "drop_off"}
@@ -329,12 +360,27 @@ class GroceryAgent:
         impass   = self.walls | item_set
         reserved = set(map(tuple, (b["position"] for b in bots)))
 
+        # Build global_carried: count of each type currently in ALL bot inventories
+        # that matches what the active order still needs. Used to avoid bots picking
+        # more of a type than required fleet-wide.
+        from collections import Counter
+        active_order = next((o for o in state.get("orders",[])
+                             if o.get("status")=="active" and not o.get("complete")), None)
+        needed_types = set(order_remaining_types(active_order)) if active_order else set()
+        global_carried = Counter()
+        for b in bots:
+            for t in b.get("inventory", []):
+                if t in needed_types:
+                    global_carried[t] += 1
+        state["_global_carried"] = global_carried
+
         assigned_ids = set()
         actions = []
         for bot in sorted(bots, key=lambda b: b["id"]):
             a = plan_bot(bot, state, self.walls, item_set, impass, assigned_ids, reserved)
             actions.append(a)
 
+        state.pop("_global_carried", None)
         return {"actions": actions}
 
 
