@@ -56,6 +56,7 @@ nav:
     - Overview: strategy/overview.md
     - Coding Patterns: strategy/coding-patterns.md
   - Tasks:
-    - Task 1: tasks/task1.md
-    - Task 2: tasks/task2.md
-    - Task 3: tasks/task3.md
+    - Grocery Bot: tasks/task1.md
+    - Tripletex: tasks/task2.md
+    - Astar Island: tasks/task3.md
+    - NorgesGruppen: tasks/task4.md
