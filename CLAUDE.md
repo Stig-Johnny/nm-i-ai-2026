@@ -1,5 +1,9 @@
 # NM i AI 2026 — Competition Repo
 
+## FIRST: Read STATUS.md
+
+**Before doing anything, read `STATUS.md`** in the repo root. It has the full competition state: scores, blockers, what's running, infrastructure details, and key learnings. Update it after every significant action.
+
 ## Git Rules
 
 - **Each agent owns their task directory.** Only the owner pushes changes to that dir.
