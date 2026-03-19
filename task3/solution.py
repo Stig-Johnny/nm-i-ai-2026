@@ -43,6 +43,10 @@ TERRAIN_TO_CLASS = {
     5: 5,   # Mountain
 }
 
+# Static terrains that never change — lock them in with high confidence
+STATIC_TERRAIN = {10, 5}   # Ocean, Mountain
+MOSTLY_STATIC = {4}        # Forest (can change but mostly stable)
+
 
 def make_session(token):
     s = requests.Session()
@@ -189,6 +193,86 @@ def observation_to_class(grid_value):
     return TERRAIN_TO_CLASS.get(grid_value, 0)
 
 
+def is_static_raw(grid_value):
+    """Return True if this terrain type never changes."""
+    return grid_value in STATIC_TERRAIN
+
+
+def cell_entropy(probs):
+    """Shannon entropy of a probability vector (nats)."""
+    p = np.clip(probs, 1e-9, 1.0)
+    return -np.sum(p * np.log(p))
+
+
+def coverage_grid_positions(H, W, step=15):
+    """Tile H×W map with step×step viewports. Returns list of (vx, vy)."""
+    positions = []
+    for gy in range(0, H, step):
+        for gx in range(0, W, step):
+            positions.append((min(gx, W - step), min(gy, H - step)))
+    # Deduplicate (can happen when map dims < step)
+    return list(dict.fromkeys(positions))
+
+
+def highest_entropy_viewport(pred, H, W, step=15):
+    """Find the step×step viewport position with highest average cell entropy."""
+    best_vx, best_vy, best_score = 0, 0, -1.0
+    for vy in range(0, H - step + 1, 5):
+        for vx in range(0, W - step + 1, 5):
+            region = pred[vy:vy + step, vx:vx + step]
+            # avg entropy per cell in this viewport
+            score = np.mean([-np.sum(np.clip(region[y, x], 1e-9, 1) *
+                                     np.log(np.clip(region[y, x], 1e-9, 1)))
+                             for y in range(region.shape[0])
+                             for x in range(region.shape[1])])
+            if score > best_score:
+                best_score, best_vx, best_vy = score, vx, vy
+    return best_vx, best_vy
+
+
+def apply_observation(counts, observed, grid_rows, vp, W, H, initial_grid=None):
+    """Update counts + observed arrays from one viewport result."""
+    for dy, row in enumerate(grid_rows):
+        for dx, cell in enumerate(row):
+            mx = vp["x"] + dx
+            my = vp["y"] + dy
+            if 0 <= mx < W and 0 <= my < H:
+                observed[my][mx] = True
+                cls = observation_to_class(cell)
+                counts[my][mx][cls] += 1
+                # Lock static terrain from the RAW cell value
+                if is_static_raw(cell):
+                    # Override: static cells get very high count in their correct class
+                    counts[my][mx] = np.zeros(NUM_CLASSES)
+                    counts[my][mx][cls] = 10  # equivalent to 10 observations → alpha ≈ 0.9
+
+
+def blend_observation_prior(counts, pred, H, W, initial_raw_grid=None):
+    """Update prediction tensor in-place by blending observation frequencies with prior."""
+    for y in range(H):
+        for x in range(W):
+            total = counts[y][x].sum()
+            if total <= 0:
+                continue
+
+            obs_dist = (counts[y][x] + PROB_FLOOR) / (total + PROB_FLOOR * NUM_CLASSES)
+
+            # Higher alpha for more observations, scaled per terrain type
+            raw_val = initial_raw_grid[y][x] if initial_raw_grid else -1
+            if raw_val in STATIC_TERRAIN:
+                # Static terrain — trust observation heavily
+                alpha = 0.98
+            elif raw_val in MOSTLY_STATIC:
+                # Forest — fairly stable but can change
+                alpha = min(total / 2.0, 0.85)
+            else:
+                # Dynamic cells — be more conservative; ground truth is stochastic
+                # 1 obs → 0.60, 2 obs → 0.75, 3+ obs → 0.85
+                alpha = min(0.40 + total * 0.15, 0.85)
+
+            pred[y][x] = alpha * obs_dist + (1 - alpha) * pred[y][x]
+
+
 def solve_baseline(s, round_id, detail):
     """Submit uniform 1/6 for all seeds."""
     H, W = detail["map_height"], detail["map_width"]
@@ -224,11 +308,14 @@ def solve_with_priors(s, round_id, detail):
 def solve_explore(s, round_id, detail):
     """Use queries to observe + build frequency-based predictions.
 
-    Strategy: Each simulate call is a DIFFERENT stochastic outcome.
-    Observing the same area multiple times builds empirical distributions.
+    Phase 1: Full coverage — tile the map once per seed (9 queries/seed × 5 = 45 total)
+    Phase 2: Re-observe highest-entropy viewport per seed (1 query/seed × 5 = 5 total)
 
-    Phase 1: Full coverage (9 queries/seed, 5 seeds = 45 queries)
-    Phase 2: Re-observe dynamic areas with remaining 5 queries
+    Key improvements vs. v1:
+    - Static cells (Ocean, Mountain) are locked in with high confidence (alpha=0.98)
+    - Dynamic cells use alpha=0.60 for 1 obs, 0.75 for 2, 0.85 for 3+
+    - Phase 2 re-queries the highest-entropy area for each seed
+    - No more accidental overwrite with priors when queries exhausted
     """
     H, W = detail["map_height"], detail["map_width"]
     seeds = detail["seeds_count"]
@@ -236,31 +323,35 @@ def solve_explore(s, round_id, detail):
 
     budget = get_budget(s)
     queries_left = budget["queries_max"] - budget["queries_used"]
-    print(f"Budget: {queries_left} queries total")
+    print(f"Budget: {queries_left} queries remaining of {budget['queries_max']}")
 
     if queries_left == 0:
-        print("No queries left — submitting priors only")
-        solve_with_priors(s, round_id, detail)
+        # No budget — just return. Priors already submitted by solve_with_priors.
+        print("No queries left — using previously submitted priors.")
         return
 
-    # Coverage positions for 40x40 with 15x15 viewport
-    coverage_positions = []
-    for gy in range(0, H, 15):
-        for gx in range(0, W, 15):
-            coverage_positions.append((min(gx, W - 15), min(gy, H - 15)))
+    # Phase 1: full coverage positions (tiles 40×40 in 9 positions with 15×15 viewports)
+    coverage_positions = coverage_grid_positions(H, W, step=15)
+    # Allocate: keep at least 1 query/seed for phase 2, rest for phase 1
+    phase1_per_seed = min(len(coverage_positions), (queries_left - seeds) // seeds)
+    phase1_per_seed = max(1, phase1_per_seed)  # At least 1 phase-1 query per seed
+    phase2_budget = max(0, queries_left - phase1_per_seed * seeds)
+    print(f"Phase 1: {phase1_per_seed} queries/seed | Phase 2: {phase2_budget} remaining")
 
-    # Phase 1: 9 queries per seed for full coverage = 45 queries
-    queries_phase1 = min(9, queries_left // seeds)
+    all_preds = {}  # seed_idx → final prediction array
 
-    # Accumulate observation counts per cell per seed
-    all_counts = {}  # seed_idx -> H×W×NUM_CLASSES count array
-
+    # ── Phase 1: full coverage ──────────────────────────────────────────────
     for seed_idx in range(seeds):
-        print(f"\n=== Seed {seed_idx} ===")
+        print(f"\n=== Seed {seed_idx} — Phase 1 ===")
         counts = np.zeros((H, W, NUM_CLASSES))
         observed = np.zeros((H, W), dtype=bool)
 
-        for qi, (vx, vy) in enumerate(coverage_positions[:queries_phase1]):
+        # Get initial raw grid for this seed (used for alpha selection)
+        initial_raw = None
+        if seed_idx < len(initial_states):
+            initial_raw = initial_states[seed_idx]["grid"]
+
+        for qi, (vx, vy) in enumerate(coverage_positions[:phase1_per_seed]):
             try:
                 result = simulate(s, round_id, seed_idx, vx, vy)
             except Exception as e:
@@ -273,55 +364,96 @@ def solve_explore(s, round_id, detail):
 
             grid = result.get("grid", [])
             vp = result.get("viewport", {"x": vx, "y": vy, "w": 15, "h": 15})
-
-            for dy, row in enumerate(grid):
-                for dx, cell in enumerate(row):
-                    mx = vp["x"] + dx
-                    my = vp["y"] + dy
-                    if 0 <= mx < W and 0 <= my < H:
-                        observed[my][mx] = True
-                        cls = observation_to_class(cell)
-                        counts[my][mx][cls] += 1
+            apply_observation(counts, observed, grid, vp, W, H, initial_raw)
 
             coverage = observed.mean() * 100
             ql = result.get("queries_used", "?")
             print(f"  Q{qi}: ({vx},{vy}) coverage={coverage:.0f}% used={ql}/{result.get('queries_max','?')}")
 
-        all_counts[seed_idx] = counts
-
-        # Build prediction from counts + initial priors
+        # Build prediction: prior → observation blend
         if seed_idx < len(initial_states):
             pred = initial_grid_to_priors(initial_states[seed_idx]["grid"])
         else:
             pred = np.full((H, W, NUM_CLASSES), 1.0 / NUM_CLASSES)
 
-        for y in range(H):
-            for x in range(W):
-                total = counts[y][x].sum()
-                if total > 0:
-                    # Blend observation frequency with prior
-                    obs_dist = (counts[y][x] + PROB_FLOOR) / (total + PROB_FLOOR * NUM_CLASSES)
-                    alpha = min(total / 3.0, 0.9)  # More observations = more confidence
-                    pred[y][x] = alpha * obs_dist + (1 - alpha) * pred[y][x]
+        blend_observation_prior(counts, pred, H, W, initial_raw)
 
-        # Interpolate unobserved from nearest observed
+        # Spatial interpolation: propagate nearby observations to unobserved cells
         if observed.any() and not observed.all():
-            from scipy.ndimage import distance_transform_edt
-            dist, indices = distance_transform_edt(~observed, return_indices=True)
-            for y in range(H):
-                for x in range(W):
-                    if not observed[y][x]:
-                        ny, nx = indices[0][y][x], indices[1][y][x]
-                        alpha = min(dist[y][x] / 10.0, 0.7)
-                        pred[y][x] = (1 - alpha) * pred[ny][nx] + alpha * pred[y][x]
+            try:
+                from scipy.ndimage import distance_transform_edt
+                dist, indices = distance_transform_edt(~observed, return_indices=True)
+                for y in range(H):
+                    for x in range(W):
+                        if not observed[y][x]:
+                            ny, nx = indices[0][y][x], indices[1][y][x]
+                            # Further from nearest observation = rely more on prior
+                            alpha = max(0.0, 1.0 - dist[y][x] / 8.0)
+                            pred[y][x] = alpha * pred[ny][nx] + (1 - alpha) * pred[y][x]
+            except ImportError:
+                pass  # scipy not available — skip interpolation
 
         # Floor and normalize
         pred = np.maximum(pred, PROB_FLOOR)
         pred = pred / pred.sum(axis=2, keepdims=True)
 
+        all_preds[seed_idx] = (pred, counts, observed)
+
+        # Submit phase 1 prediction (will be improved in phase 2)
         result = submit_prediction(s, round_id, seed_idx, pred.tolist())
         obs_pct = observed.mean() * 100
-        print(f"  Submitted (coverage={obs_pct:.0f}%): {result}")
+        print(f"  Phase 1 submitted (coverage={obs_pct:.0f}%): {result}")
+
+    # ── Phase 2: re-observe highest-entropy viewports ───────────────────────
+    if phase2_budget > 0:
+        print(f"\n=== Phase 2: {phase2_budget} refinement queries ===")
+
+        # Assign phase 2 queries across seeds (1 per seed if budget allows)
+        phase2_per_seed = min(1, phase2_budget // seeds)
+        extra = phase2_budget - phase2_per_seed * seeds
+
+        for seed_idx in range(seeds):
+            n_queries = phase2_per_seed + (1 if seed_idx < extra else 0)
+            if n_queries == 0:
+                continue
+
+            pred, counts, observed = all_preds[seed_idx]
+            initial_raw = initial_states[seed_idx]["grid"] if seed_idx < len(initial_states) else None
+
+            for q in range(n_queries):
+                # Find viewport with highest average prediction entropy
+                vx, vy = highest_entropy_viewport(pred, H, W, step=15)
+                print(f"  Seed {seed_idx} Q{q}: re-observe ({vx},{vy}) — highest entropy viewport")
+
+                try:
+                    result = simulate(s, round_id, seed_idx, vx, vy)
+                except Exception as e:
+                    print(f"  Error: {e}")
+                    break
+
+                if "error" in result or "detail" in result:
+                    print(f"  Result: {result}")
+                    break
+
+                grid = result.get("grid", [])
+                vp = result.get("viewport", {"x": vx, "y": vy, "w": 15, "h": 15})
+                apply_observation(counts, observed, grid, vp, W, H, initial_raw)
+
+                # Reblend with updated counts
+                if seed_idx < len(initial_states):
+                    pred = initial_grid_to_priors(initial_states[seed_idx]["grid"])
+                else:
+                    pred = np.full((H, W, NUM_CLASSES), 1.0 / NUM_CLASSES)
+
+                blend_observation_prior(counts, pred, H, W, initial_raw)
+                pred = np.maximum(pred, PROB_FLOOR)
+                pred = pred / pred.sum(axis=2, keepdims=True)
+                all_preds[seed_idx] = (pred, counts, observed)
+
+            # Resubmit improved prediction
+            final_pred = all_preds[seed_idx][0]
+            result = submit_prediction(s, round_id, seed_idx, final_pred.tolist())
+            print(f"  Seed {seed_idx} Phase 2 submitted: {result}")
 
 
 def find_active_round(s):
@@ -349,11 +481,21 @@ def main():
         print("Polling for active round...")
         seen_rounds = set()
         while True:
-            rounds = get_rounds(s)
+            try:
+                rounds = get_rounds(s)
+            except Exception as e:
+                print(f"Error fetching rounds: {e}")
+                time.sleep(30)
+                continue
+
             for r in rounds:
                 if r.get("status") == "active" and r["id"] not in seen_rounds:
                     # Check if we already submitted for this round
-                    budget = get_budget(s)
+                    try:
+                        budget = get_budget(s)
+                    except Exception:
+                        budget = {}
+
                     if budget.get("queries_used", 0) > 0:
                         print(f"\nRound {r['round_number']} already has {budget['queries_used']} queries used — skipping")
                         seen_rounds.add(r["id"])
@@ -361,14 +503,29 @@ def main():
 
                     seen_rounds.add(r["id"])
                     print(f"\nRound {r['round_number']} is active!")
-                    detail = get_round_detail(s, r["id"])
-                    # Submit priors first (free, instant score), then explore to improve
-                    print("Phase 1: submitting priors-based prediction...")
-                    solve_with_priors(s, r["id"], detail)
-                    print("Phase 2: exploring with queries...")
-                    solve_explore(s, r["id"], detail)
+
+                    try:
+                        detail = get_round_detail(s, r["id"])
+                    except Exception as e:
+                        print(f"Error fetching round detail: {e}")
+                        continue
+
+                    # Submit priors first (instant score), then explore to improve
+                    print("Submitting informed priors...")
+                    try:
+                        solve_with_priors(s, r["id"], detail)
+                    except Exception as e:
+                        print(f"solve_with_priors error: {e}")
+
+                    print("Exploring with queries...")
+                    try:
+                        solve_explore(s, r["id"], detail)
+                    except Exception as e:
+                        print(f"solve_explore error: {e}")
+
             time.sleep(30)
             print(".", end="", flush=True)
+        return
 
     active = find_active_round(s)
     if not active:
@@ -388,13 +545,11 @@ def main():
     elif args.explore:
         solve_explore(s, round_id, detail)
     else:
-        # Default: priors first (free), then explore if budget available
-        print("Submitting priors-based prediction...")
+        # Default: priors first, then explore
+        print("Submitting informed priors...")
         solve_with_priors(s, round_id, detail)
-        budget = get_budget(s)
-        if budget.get("queries_used", 0) < budget.get("queries_max", 50):
-            print("\nNow exploring with remaining budget...")
-            solve_explore(s, round_id, detail)
+        print("Exploring with queries...")
+        solve_explore(s, round_id, detail)
 
 
 if __name__ == "__main__":
