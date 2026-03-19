@@ -64,6 +64,19 @@ Docs auto-deploy to GitHub Pages on push. Keep them current so the whole team kn
 - Don't spend more than 30 minutes stuck — ask for help on Discord or switch tasks.
 - Don't optimize a task beyond 90% if another task is at 0%.
 
+## NorgesGruppen Sandbox Rules (CRITICAL — ban risk)
+
+**BANNED IMPORTS** — using any of these triggers auto-ban:
+`os, sys, subprocess, socket, ctypes, builtins, importlib, pickle, marshal, shelve, shutil, yaml, requests, urllib, http.client, multiprocessing, threading, signal, gc, code, codeop, pty`
+
+**BANNED FUNCTIONS:** `eval()`, `exec()`, `compile()`, `__import__()`, dangerous `getattr()`
+
+**ALLOWED:** `json, argparse, numpy, pathlib, onnxruntime, PIL, torch, torchvision, ultralytics, cv2, albumentations, sklearn, pycocotools`
+
+**Weight formats:** `.pt`, `.pth`, `.onnx`, `.safetensors`, `.npy` — but prefer ONNX over pickle-based .pt
+
+**Note:** ultralytics internally imports banned modules (os, shutil). Use ONNX Runtime directly instead.
+
 ## LLM Access
 
 We use **Claude Code subscription** — no API keys. For LLM tasks, reason directly or spawn sub-agents.
