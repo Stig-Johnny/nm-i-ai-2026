@@ -50,6 +50,7 @@ nav:
     - Scores: warmup/scores.md
   - Strategy:
     - Overview: strategy/overview.md
+    - Coding Patterns: strategy/coding-patterns.md
   - Tasks:
     - Task 1: tasks/task1.md
     - Task 2: tasks/task2.md
