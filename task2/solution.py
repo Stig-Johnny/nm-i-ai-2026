@@ -299,22 +299,12 @@ def create_product(base_url, token, e):
     if e.get("priceIncVat"):
         body["priceIncludingVatCurrency"] = float(e["priceIncVat"])
     
-    # Get vatType ID — look up 25% rate
-    _, vt_resp = tx_get(base_url, token, "/product/vatType", {"fields": "id,name,number", "count": 20})
-    vat_types = vt_resp.get("values", [])
-    vat_id = None
-    vat_pct = str(e.get("vatType", "25")).replace("%", "").strip()
-    for vt in vat_types:
-        nm = str(vt.get("name", "")).lower()
-        num = str(vt.get("number", ""))
-        if vat_pct in nm or vat_pct == num or ("25" in nm and vat_pct == "25"):
-            vat_id = vt["id"]
-            break
-    if not vat_id and vat_types:
-        # Default to first/standard
-        vat_id = vat_types[0]["id"]
-    if vat_id:
-        body["vatType"] = {"id": vat_id}
+    # Norwegian standard VAT type IDs (Tripletex constants)
+    # 3=25% standard, 33=15% food/drink, 31=0% books/exempt
+    NOK_VAT = {"25": 3, "15": 33, "12": 5, "0": 31}
+    vat_pct = str(e.get("vatType", "25")).replace("%", "").strip().split(".")[0]
+    vat_id = NOK_VAT.get(vat_pct, 3)
+    body["vatType"] = {"id": vat_id}
     
     status, resp = tx_post(base_url, token, "/product", body)
     print(f"create_product: {status} {str(resp)[:300]}")
@@ -391,27 +381,40 @@ def create_invoice(base_url, token, e):
     if r.status_code in (200, 201):
         return True
     
-    # Method 2: POST /invoice with invoiceLines directly (no order)
+    # Method 2: POST /invoice with orders reference (standard approach per docs)
+    if order_id:
+        inv_body2 = {
+            "invoiceDate": inv_date,
+            "invoiceDueDate": due_date,
+            "customer": {"id": customer_id},
+            "orders": [{"id": order_id}]
+        }
+        status2, inv_resp2 = tx_post(base_url, token, "/invoice", inv_body2)
+        print(f"POST /invoice with order ref: {status2} {str(inv_resp2)[:300]}")
+        if status2 in (200, 201):
+            return True
+
+    # Method 3: POST /invoice with invoiceLines directly (no order)
     if customer_id:
         lines = []
         for line in e.get("lines", []):
             lines.append({
                 "description": line.get("description", "Service"),
-                "count": line.get("count", 1),
-                "unitPriceExcludingVatCurrency": line.get("unitPrice") or line.get("unitPriceExcludingVatCurrency") or 0,
+                "count": float(line.get("count", 1)),
+                "unitPriceExcludingVatCurrency": float(line.get("unitPrice") or line.get("unitPriceExcludingVatCurrency") or 0),
             })
         if not lines:
-            lines = [{"description": e.get("description", "Service"), "count": 1, "unitPriceExcludingVatCurrency": 0}]
+            lines = [{"description": e.get("description", "Service"), "count": 1.0, "unitPriceExcludingVatCurrency": float(e.get("amount", 0))}]
         
-        inv_body2 = {
+        inv_body3 = {
             "invoiceDate": inv_date,
             "invoiceDueDate": due_date,
             "customer": {"id": customer_id},
             "invoiceLines": lines
         }
-        status2, inv_resp2 = tx_post(base_url, token, "/invoice", inv_body2)
-        print(f"POST /invoice direct: {status2} {str(inv_resp2)[:300]}")
-        if status2 in (200, 201):
+        status3, inv_resp3 = tx_post(base_url, token, "/invoice", inv_body3)
+        print(f"POST /invoice direct lines: {status3} {str(inv_resp3)[:300]}")
+        if status3 in (200, 201):
             return True
     
     return False
