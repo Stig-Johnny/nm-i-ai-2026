@@ -1,4 +1,4 @@
-# Competition Status — Last Updated 2026-03-19 20:40 CET
+# Competition Status — Last Updated 2026-03-19 21:10 CET
 
 ## Leaderboard (19:45 CET)
 
@@ -6,9 +6,12 @@
 |---|------|-----------|-----------|-------|-------|
 | 1 | Make No Mistakes | 100.0 | --- | --- | 25.0 |
 | 2 | Prompt Injection | 63.3 | --- | --- | 15.8 |
-| 6 | **Dashecorp (us)** | **47.4** | --- | --- | **14.9** |
+| 1 | Slop Overflow | 100.0 | --- | --- | 33.3 |
+| 1 | 000110 000111 | --- | 100.0 | --- | 33.3 |
+| 14 | **Dashecorp (us)** | **46.8** | **---** | --- | **15.6** |
 
-Only Tripletex scoring. No teams have Detection or Astar scores yet.
+NorgesGruppen Detection NOW SCORING — 4 teams have mAP scores. We submit at midnight UTC.
+Astar Island leaderboard still says "hasn't started".
 
 ## Active Tasks
 
