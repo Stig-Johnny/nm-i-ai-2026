@@ -35,6 +35,18 @@ ANTHROPIC_MODEL = "claude-opus-4-5"
 # Tripletex client helpers
 # ============================================================
 
+def resolve_base_url(base_url):
+    """If tx-proxy.ainm.no doesn't resolve, we can't do anything. Just return as-is."""
+    import socket
+    try:
+        host = base_url.split("/")[2].split(":")[0]
+        socket.getaddrinfo(host, 443)
+        return base_url, True
+    except Exception as e:
+        print(f"DNS resolution failed for {base_url}: {e}")
+        return base_url, False
+
+
 def tx_get(base_url, token, path, params=None):
     r = requests.get(f"{base_url}{path}", auth=("0", token), params=params or {}, timeout=30)
     return r.status_code, r.json() if r.content else {}
@@ -79,29 +91,61 @@ Your job is to output a JSON plan with these fields:
 Output ONLY valid JSON, no markdown, no explanation.
 """
 
+def _parse_llm_output(raw, prompt):
+    """Parse LLM JSON output into a plan dict."""
+    raw = raw.strip()
+    if "```" in raw:
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    parsed = json.loads(raw.strip())
+    if isinstance(parsed, list) and parsed:
+        parsed = parsed[0]
+    if isinstance(parsed, dict):
+        return parsed
+    return simple_parse(prompt)
+
+
+def _gemini_parse(full_prompt):
+    """Use Google Gemini API (Application Default Credentials — works in Cloud Run)."""
+    import google.generativeai as genai
+    from google.auth import default as gauth_default
+    credentials, project = gauth_default()
+    genai.configure(credentials=credentials)
+    model = genai.GenerativeModel("gemini-2.0-flash")
+    response = model.generate_content(f"{SYSTEM_PROMPT}\n\nTask:\n{full_prompt}")
+    return response.text
+
+
 def parse_prompt_with_llm(prompt, file_texts):
     full_prompt = prompt
     if file_texts:
         full_prompt += "\n\nAttached files:\n" + "\n".join(file_texts)
     
-    # Use claude CLI (Claude Code subscription — no API key needed)
-    try:
-        result = subprocess.run(
-            ["/Users/claude/.local/bin/claude", "-p", SYSTEM_PROMPT],
-            input=full_prompt,
-            capture_output=True, text=True, timeout=60
-        )
-        raw = result.stdout.strip()
-        # Strip markdown fences if present
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw.strip())
-    except Exception as e:
-        print(f"claude CLI error: {e}, stdout: {result.stdout[:200] if 'result' in dir() else ''}")
-        # Fallback: simple keyword parser
-        return simple_parse(prompt)
+    # In Cloud Run: use Gemini (ADC) — in local: use claude CLI
+    in_cloud_run = bool(os.environ.get("K_SERVICE"))
+    
+    if in_cloud_run:
+        try:
+            raw = _gemini_parse(full_prompt)
+            print(f"Gemini raw output: {raw[:300]}")
+            return _parse_llm_output(raw, prompt)
+        except Exception as e:
+            print(f"Gemini error: {e}")
+            return simple_parse(prompt)
+    else:
+        try:
+            result = subprocess.run(
+                ["/Users/claude/.local/bin/claude", "-p", SYSTEM_PROMPT],
+                input=full_prompt,
+                capture_output=True, text=True, timeout=60
+            )
+            raw = result.stdout.strip()
+            print(f"LLM raw output: {raw[:300]}")
+            return _parse_llm_output(raw, prompt)
+        except Exception as e:
+            print(f"claude CLI error: {e}")
+            return simple_parse(prompt)
 
 # ============================================================
 # Task executor
@@ -435,8 +479,17 @@ async def solve(request: Request):
     plan = parse_prompt_with_llm(prompt, file_texts)
     print(f"Plan: {json.dumps(plan, indent=2)[:500] if plan else 'None'}")
     
+    print(f"raw request body keys: {list(body.keys())}")
+    print(f"full body sample: {json.dumps(body)[:500]}")
+    
     if plan and base_url and token:
-        execute_plan(base_url, token, plan, prompt)
+        resolved_url, dns_ok = resolve_base_url(base_url)
+        if not dns_ok:
+            print(f"WARNING: DNS failed for {base_url} — API calls will fail")
+        try:
+            execute_plan(resolved_url, token, plan, prompt)
+        except Exception as e:
+            print(f"execute_plan error: {e}")
     else:
         print("No plan or missing credentials")
     
