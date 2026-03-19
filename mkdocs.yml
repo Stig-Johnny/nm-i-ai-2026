@@ -1,0 +1,56 @@
+site_name: NM i AI 2026
+site_description: Competition docs and strategy for NM i AI 2026
+site_author: Team Dashecorp
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.tabs
+    - navigation.top
+    - navigation.sections
+    - search.suggest
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Rules:
+    - Pre-Competition: rules/pre-competition.md
+    - Main Competition: rules/main-competition.md
+  - Warm-up:
+    - Grocery Bot: warmup/grocery-bot.md
+    - Game Protocol: warmup/protocol.md
+    - Scores: warmup/scores.md
+  - Strategy:
+    - Overview: strategy/overview.md
+  - Tasks:
+    - Task 1: tasks/task1.md
+    - Task 2: tasks/task2.md
+    - Task 3: tasks/task3.md
