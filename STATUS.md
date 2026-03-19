@@ -1,4 +1,4 @@
-# Competition Status — Last Updated 2026-03-19 19:55 CET
+# Competition Status — Last Updated 2026-03-19 20:40 CET
 
 ## Leaderboard (19:45 CET)
 
@@ -6,7 +6,7 @@
 |---|------|-----------|-----------|-------|-------|
 | 1 | Make No Mistakes | 100.0 | --- | --- | 25.0 |
 | 2 | Prompt Injection | 63.3 | --- | --- | 15.8 |
-| 6 | **Dashecorp (us)** | **38.3** | --- | --- | **9.6** |
+| 6 | **Dashecorp (us)** | **47.4** | --- | --- | **14.9** |
 
 Only Tripletex scoring. No teams have Detection or Astar scores yet.
 
