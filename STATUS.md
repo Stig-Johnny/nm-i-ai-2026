@@ -1,4 +1,14 @@
-# Competition Status — Last Updated 2026-03-19 19:30 CET
+# Competition Status — Last Updated 2026-03-19 19:55 CET
+
+## Leaderboard (19:45 CET)
+
+| # | Team | Tripletex | Detection | Astar | Total |
+|---|------|-----------|-----------|-------|-------|
+| 1 | Make No Mistakes | 100.0 | --- | --- | 25.0 |
+| 2 | Prompt Injection | 63.3 | --- | --- | 15.8 |
+| 6 | **Dashecorp (us)** | **38.3** | --- | --- | **9.6** |
+
+Only Tripletex scoring. No teams have Detection or Astar scores yet.
 
 ## Active Tasks
 
@@ -30,7 +40,8 @@
 ### Task 4: NorgesGruppen (ZIP upload)
 - **Owner:** Claude-5
 - **Code:** `task4/run.py` (submission), `task4/train_detection.py` (training)
-- **Training:** YOLOv8n single-class detection, epoch 16/80, mAP50=0.82
+- **Training:** YOLOv8n single-class detection, epoch 31/80, best mAP50=0.82 (saved)
+- **Submission zip ready:** `norgesgruppen-submission.zip` (11MB) with trained best.pt
 - **Data:** `data/coco/train/` (248 images, 22.7k annotations, 356 categories)
 - **Submission limit:** 0/3 remaining today (burned on network errors). Resets midnight UTC (01:00 CET)
 - **Submit at 01:00 CET:** Package `task4/run.py` + `task4/best_detection.pt` as ZIP, Stig uploads
