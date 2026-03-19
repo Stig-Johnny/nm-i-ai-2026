@@ -263,10 +263,17 @@ def main():
             rounds = get_rounds(s)
             for r in rounds:
                 if r.get("status") == "active" and r["id"] not in seen_rounds:
+                    # Check if we already submitted for this round
+                    budget = get_budget(s)
+                    if budget.get("queries_used", 0) > 0:
+                        print(f"\nRound {r['round_number']} already has {budget['queries_used']} queries used — skipping")
+                        seen_rounds.add(r["id"])
+                        continue
+
                     seen_rounds.add(r["id"])
                     print(f"\nRound {r['round_number']} is active!")
                     detail = get_round_detail(s, r["id"])
-                    # Submit priors first (free), then explore
+                    # Submit priors first (free, instant score), then explore to improve
                     print("Phase 1: submitting priors-based prediction...")
                     solve_with_priors(s, r["id"], detail)
                     print("Phase 2: exploring with queries...")
