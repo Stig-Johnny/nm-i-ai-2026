@@ -1,0 +1,38 @@
+name: Check submission safety
+on:
+  pull_request:
+    paths: ['task4/**']
+  push:
+    paths: ['task4/**']
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for banned imports
+        run: |
+          BANNED="os|sys|subprocess|socket|ctypes|builtins|importlib|pickle|marshal|shelve|shutil|yaml|requests|urllib|http\.client|multiprocessing|threading|signal|gc\b|code\b|codeop|pty"
+          FAILED=0
+          for f in task4/*.py; do
+            [ -f "$f" ] || continue
+            echo "Checking $f..."
+            while IFS= read -r line; do
+              [[ "$line" =~ ^[[:space:]]*# ]] && continue
+              if echo "$line" | grep -qE "^(import|from) ($BANNED)"; then
+                echo "❌ BANNED in $f: $line"
+                FAILED=1
+              fi
+            done < "$f"
+            for func in "eval(" "exec(" "compile(" "__import__"; do
+              if grep -q "$func" "$f"; then
+                echo "❌ BANNED FUNCTION in $f: $func"
+                FAILED=1
+              fi
+            done
+          done
+          if [ $FAILED -eq 1 ]; then
+            echo "⛔ Submission contains banned imports — fix before submitting"
+            exit 1
+          fi
+          echo "✅ All Python files clean"
