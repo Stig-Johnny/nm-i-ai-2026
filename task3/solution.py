@@ -77,43 +77,107 @@ def submit_prediction(s, round_id, seed_index, prediction):
 
 
 def initial_grid_to_priors(grid):
-    """Convert initial grid to probability priors. Static terrain gets high confidence."""
+    """Convert initial grid to probability priors using simulation mechanics.
+
+    Key rules:
+    - Ocean & Mountain: static (never change)
+    - Settlements: can grow, become ports (if coastal), become ruins, change faction
+    - Ruins: can be reclaimed by nearby settlements, overgrown by forest, fade to plains
+    - Forest: mostly stable, but can be cleared for settlement expansion
+    - Plains near settlements: likely to become settlements or forests
+    - Adjacency matters: cells near settlements are more dynamic
+    """
     H, W = len(grid), len(grid[0])
     priors = np.full((H, W, NUM_CLASSES), PROB_FLOOR)
+
+    # First pass: find settlement and ocean positions for adjacency analysis
+    settlement_positions = set()
+    ocean_positions = set()
+    for y in range(H):
+        for x in range(W):
+            if grid[y][x] in (1, 2):
+                settlement_positions.add((y, x))
+            if grid[y][x] == 10:
+                ocean_positions.add((y, x))
+
+    def near_settlement(y, x, radius=3):
+        for sy, sx in settlement_positions:
+            if abs(y - sy) + abs(x - sx) <= radius:
+                return True
+        return False
+
+    def near_ocean(y, x):
+        for dy in range(-1, 2):
+            for dx in range(-1, 2):
+                if (y + dy, x + dx) in ocean_positions:
+                    return True
+        return False
 
     for y in range(H):
         for x in range(W):
             raw = grid[y][x]
-            cls = TERRAIN_TO_CLASS.get(raw, 0)
 
-            if raw == 10:  # Ocean — stays ocean
+            if raw == 10:  # Ocean — never changes
                 priors[y][x][0] = 0.98
-            elif raw == 5:  # Mountain — stays mountain
-                priors[y][x][5] = 0.95
-            elif raw == 4:  # Forest — mostly stays, can become settlement/ruin
-                priors[y][x][4] = 0.70
-                priors[y][x][0] = 0.10
-                priors[y][x][1] = 0.05
-                priors[y][x][3] = 0.05
-            elif raw == 11:  # Plains — can become anything
-                priors[y][x][0] = 0.40
+            elif raw == 5:  # Mountain — never changes
+                priors[y][x][5] = 0.98
+            elif raw == 4:  # Forest
+                if near_settlement(y, x, 2):
+                    # Forest near settlement can be cleared
+                    priors[y][x][4] = 0.50
+                    priors[y][x][1] = 0.15
+                    priors[y][x][0] = 0.15
+                    priors[y][x][3] = 0.05
+                else:
+                    priors[y][x][4] = 0.80
+                    priors[y][x][0] = 0.08
+            elif raw == 11:  # Plains
+                if near_settlement(y, x, 2):
+                    # Plains near settlement — likely to be settled
+                    priors[y][x][0] = 0.25
+                    priors[y][x][1] = 0.25
+                    priors[y][x][4] = 0.15
+                    priors[y][x][3] = 0.10
+                    priors[y][x][2] = 0.05 if near_ocean(y, x) else 0.01
+                else:
+                    priors[y][x][0] = 0.50
+                    priors[y][x][4] = 0.25
+                    priors[y][x][1] = 0.05
+            elif raw == 1:  # Settlement
+                if near_ocean(y, x):
+                    # Coastal settlement — can become port
+                    priors[y][x][1] = 0.25
+                    priors[y][x][2] = 0.25
+                    priors[y][x][3] = 0.20
+                    priors[y][x][0] = 0.10
+                else:
+                    priors[y][x][1] = 0.35
+                    priors[y][x][3] = 0.25
+                    priors[y][x][0] = 0.15
+                    priors[y][x][2] = 0.02
+            elif raw == 2:  # Port
+                priors[y][x][2] = 0.35
                 priors[y][x][1] = 0.15
-                priors[y][x][4] = 0.20
-                priors[y][x][3] = 0.05
-            elif raw == 1:  # Settlement — can grow, die, become ruin/port
-                priors[y][x][1] = 0.40
-                priors[y][x][2] = 0.10
                 priors[y][x][3] = 0.20
                 priors[y][x][0] = 0.10
-            elif raw == 2:  # Port — somewhat stable
-                priors[y][x][2] = 0.45
-                priors[y][x][1] = 0.15
-                priors[y][x][3] = 0.15
+            elif raw == 3:  # Ruin
+                if near_settlement(y, x, 3):
+                    # Ruin near settlement — can be reclaimed
+                    priors[y][x][3] = 0.25
+                    priors[y][x][1] = 0.25
+                    priors[y][x][0] = 0.15
+                    priors[y][x][4] = 0.10
+                    priors[y][x][2] = 0.05 if near_ocean(y, x) else 0.01
+                else:
+                    # Isolated ruin — becomes forest or plains
+                    priors[y][x][3] = 0.25
+                    priors[y][x][4] = 0.30
+                    priors[y][x][0] = 0.25
             elif raw == 0:  # Empty
                 priors[y][x][0] = 0.70
                 priors[y][x][4] = 0.10
             else:
-                priors[y][x][cls] = 0.50
+                priors[y][x][TERRAIN_TO_CLASS.get(raw, 0)] = 0.50
 
     # Normalize
     priors = np.maximum(priors, PROB_FLOOR)
@@ -158,35 +222,45 @@ def solve_with_priors(s, round_id, detail):
 
 
 def solve_explore(s, round_id, detail):
-    """Use queries to observe + initial grid priors."""
+    """Use queries to observe + build frequency-based predictions.
+
+    Strategy: Each simulate call is a DIFFERENT stochastic outcome.
+    Observing the same area multiple times builds empirical distributions.
+
+    Phase 1: Full coverage (9 queries/seed, 5 seeds = 45 queries)
+    Phase 2: Re-observe dynamic areas with remaining 5 queries
+    """
     H, W = detail["map_height"], detail["map_width"]
     seeds = detail["seeds_count"]
     initial_states = detail.get("initial_states", [])
 
     budget = get_budget(s)
     queries_left = budget["queries_max"] - budget["queries_used"]
-    queries_per_seed = queries_left // seeds
-    print(f"Budget: {queries_left} queries, {queries_per_seed} per seed")
+    print(f"Budget: {queries_left} queries total")
+
+    if queries_left == 0:
+        print("No queries left — submitting priors only")
+        solve_with_priors(s, round_id, detail)
+        return
 
     # Coverage positions for 40x40 with 15x15 viewport
-    positions = []
+    coverage_positions = []
     for gy in range(0, H, 15):
         for gx in range(0, W, 15):
-            positions.append((min(gx, W - 15), min(gy, H - 15)))
+            coverage_positions.append((min(gx, W - 15), min(gy, H - 15)))
+
+    # Phase 1: 9 queries per seed for full coverage = 45 queries
+    queries_phase1 = min(9, queries_left // seeds)
+
+    # Accumulate observation counts per cell per seed
+    all_counts = {}  # seed_idx -> H×W×NUM_CLASSES count array
 
     for seed_idx in range(seeds):
         print(f"\n=== Seed {seed_idx} ===")
-
-        # Start with initial grid priors
-        if seed_idx < len(initial_states):
-            pred = initial_grid_to_priors(initial_states[seed_idx]["grid"])
-        else:
-            pred = np.full((H, W, NUM_CLASSES), 1.0 / NUM_CLASSES)
-
+        counts = np.zeros((H, W, NUM_CLASSES))
         observed = np.zeros((H, W), dtype=bool)
 
-        # Query the simulator
-        for qi, (vx, vy) in enumerate(positions[:queries_per_seed]):
+        for qi, (vx, vy) in enumerate(coverage_positions[:queries_phase1]):
             try:
                 result = simulate(s, round_id, seed_idx, vx, vy)
             except Exception as e:
@@ -207,16 +281,31 @@ def solve_explore(s, round_id, detail):
                     if 0 <= mx < W and 0 <= my < H:
                         observed[my][mx] = True
                         cls = observation_to_class(cell)
-                        # High confidence on observed cell
-                        pred[my][mx] = np.full(NUM_CLASSES, PROB_FLOOR)
-                        pred[my][mx][cls] = 0.90
+                        counts[my][mx][cls] += 1
 
             coverage = observed.mean() * 100
             ql = result.get("queries_used", "?")
             print(f"  Q{qi}: ({vx},{vy}) coverage={coverage:.0f}% used={ql}/{result.get('queries_max','?')}")
 
-        # For unobserved cells, blend initial priors with nearest observed
-        if observed.any():
+        all_counts[seed_idx] = counts
+
+        # Build prediction from counts + initial priors
+        if seed_idx < len(initial_states):
+            pred = initial_grid_to_priors(initial_states[seed_idx]["grid"])
+        else:
+            pred = np.full((H, W, NUM_CLASSES), 1.0 / NUM_CLASSES)
+
+        for y in range(H):
+            for x in range(W):
+                total = counts[y][x].sum()
+                if total > 0:
+                    # Blend observation frequency with prior
+                    obs_dist = (counts[y][x] + PROB_FLOOR) / (total + PROB_FLOOR * NUM_CLASSES)
+                    alpha = min(total / 3.0, 0.9)  # More observations = more confidence
+                    pred[y][x] = alpha * obs_dist + (1 - alpha) * pred[y][x]
+
+        # Interpolate unobserved from nearest observed
+        if observed.any() and not observed.all():
             from scipy.ndimage import distance_transform_edt
             dist, indices = distance_transform_edt(~observed, return_indices=True)
             for y in range(H):
