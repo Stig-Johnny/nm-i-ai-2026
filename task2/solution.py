@@ -1,147 +1,106 @@
 """
-Task 2 — Language Model
-=======================
-Scaffold for LLM-based tasks: text classification, generation, QA, RAG, etc.
-Replace `respond()` with actual task logic once docs are live.
-
-Typical patterns:
-  - Server sends text prompt / document each round
-  - Respond with label, generated text, or structured JSON
+Task 2 — LLM Task (placeholder until docs drop at 18:15 CET)
+=============================================================
+Replace `solve()` with the actual task logic once docs are live.
 
 Run:
-    python task2/solution.py --url wss://... --token TOKEN
+    python task2/solution.py --url wss://...
+    python task2/solution.py --file input.json  # offline test
 """
 
 import asyncio
 import json
 import os
 import sys
-from typing import Any
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import websockets
 
-
-# ---------- model setup (choose one approach) ----------
-
-def build_claude_client():
-    """Use Anthropic Claude via API (fast, no GPU needed)."""
-    try:
-        import anthropic
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if api_key:
-            return anthropic.Anthropic(api_key=api_key)
-    except ImportError:
-        pass
-    return None
+# Load env / API keys
+try:
+    from shared.api_keys import get_anthropic_key
+    ANTHROPIC_KEY = get_anthropic_key()
+except Exception:
+    ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 
-def build_openai_client():
-    """Use OpenAI API as fallback."""
-    try:
-        import openai
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if api_key:
-            return openai.OpenAI(api_key=api_key)
-    except ImportError:
-        pass
-    return None
+def get_client():
+    import anthropic
+    return anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 
-_claude = None
-_openai = None
-
-
-def get_clients():
-    global _claude, _openai
-    if _claude is None:
-        _claude = build_claude_client()
-    if _openai is None:
-        _openai = build_openai_client()
-    return _claude, _openai
-
-
-# ---------- main logic ----------
-
-SYSTEM_PROMPT = """You are a competition assistant for NM i AI 2026.
-Answer precisely and concisely. Return only the requested format."""
-
-
-def call_llm(prompt: str, system: str = SYSTEM_PROMPT, max_tokens: int = 256) -> str:
-    """Call LLM and return text response."""
-    claude, openai_client = get_clients()
-
-    if claude:
-        msg = claude.messages.create(
-            model="claude-haiku-4-5",  # fast + cheap
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return msg.content[0].text.strip()
-
-    if openai_client:
-        resp = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=max_tokens,
-        )
-        return resp.choices[0].message.content.strip()
-
-    # Fallback: no API key
-    print("WARNING: No LLM API key found. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.")
-    return "unknown"
-
-
-def respond(state: dict[str, Any]) -> dict[str, Any]:
+def solve(state: dict) -> dict:
     """
-    Main response function.
-    
-    Args:
-        state: Game state dict from server.
-    
-    Returns:
-        Action dict to send back.
-    
-    TODO: Replace with actual task logic once docs are live.
-    """
-    # ---- Example: text classification ----
-    text = state.get("text") or state.get("input") or state.get("prompt") or ""
-    task_type = state.get("task") or state.get("type") or ""
+    Core solver — pure function: state in, action out.
 
-    if text:
-        answer = call_llm(f"Task: {task_type}\nInput: {text}\nAnswer:")
+    TODO: implement once docs are live at 18:15.
+
+    Common patterns for LLM tasks:
+      - Classification:  state has "text" → return {"label": "..."}
+      - Generation:      state has "prompt" → return {"response": "..."}
+      - QA:             state has "question", "context" → return {"answer": "..."}
+      - Multi-choice:   state has "question", "choices" → return {"choice": 0}
+    """
+    # Print state structure on first call (helps understand format quickly)
+    if not hasattr(solve, "_logged"):
+        print(f"[task2] First state keys: {list(state.keys())}")
+        solve._logged = True
+
+    msg_type = state.get("type", "")
+    if msg_type == "game_over":
+        return None
+
+    # === PLACEHOLDER — replace with actual logic ===
+    client = get_client()
+    
+    # Example: answer a question
+    question = state.get("question") or state.get("text") or state.get("prompt") or str(state)
+    
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=256,
+            messages=[{"role": "user", "content": question}]
+        )
+        answer = resp.content[0].text.strip()
+        # TODO: adapt key name to actual task format
         return {"answer": answer}
-
-    print(f"Unknown state keys: {list(state.keys())}")
-    return {"answer": "unknown"}
+    except Exception as e:
+        print(f"[task2] API error: {e}")
+        return {"answer": ""}
 
 
 async def run(url: str):
-    print(f"Connecting to {url}")
-    # Pre-warm LLM clients
-    get_clients()
-    print(f"Claude: {'✓' if _claude else '✗'}  OpenAI: {'✓' if _openai else '✗'}")
-
+    print(f"[task2] Connecting to {url[:60]}...")
     async with websockets.connect(url) as ws:
+        rnd = 0
         async for message in ws:
             state = json.loads(message)
-            msg_type = state.get("type", "")
-
-            if msg_type == "game_over":
-                print(f"Game over — score: {state.get('score', '?')}")
+            if state.get("type") == "game_over":
+                print(f"[task2] Game over — score: {state.get('score', '?')}")
                 break
-
-            action = respond(state)
-            print(f"Round {state.get('round', '?')} → {action}")
-            await ws.send(json.dumps(action))
+            rnd += 1
+            if rnd % 10 == 0:
+                print(f"[task2] Round {rnd} | Score {state.get('score', '?')}")
+            action = solve(state)
+            if action is not None:
+                await ws.send(json.dumps(action))
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", required=True, help="WebSocket URL")
+    parser.add_argument("--url", help="WebSocket URL")
+    parser.add_argument("--file", help="Input file for offline test")
     args = parser.parse_args()
-    asyncio.run(run(args.url))
+
+    if args.url:
+        asyncio.run(run(args.url))
+    elif args.file:
+        with open(args.file) as f:
+            data = json.load(f)
+        print(json.dumps(solve(data), indent=2))
+    else:
+        parser.print_help()
