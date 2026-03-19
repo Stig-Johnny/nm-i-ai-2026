@@ -1,4 +1,21 @@
-# Competition Status — Last Updated 2026-03-19 22:45 CET
+# Competition Status — Last Updated 2026-03-19 23:30 CET
+
+## OVERNIGHT TRAINING RUNNING (no internet needed)
+
+**v4 YOLOv8m** at imgsz=640, 200 epochs, ~90s/epoch, **ETA ~4 AM CET**
+- Weights: `runs/detect/task4/runs/v4_medium_640/weights/best.pt`
+- Script: `task4/train_v4.py`
+- Check: `ps aux | grep train_v4`
+- v3 (imgsz=1280) was killed — too slow on MPS
+
+**Morning checklist:**
+1. `ps aux | grep train_v4` — still running?
+2. Check mAP: grep for `all.*mAP50` in training output
+3. If done: `cp runs/detect/task4/runs/v4_medium_640/weights/best.pt task4/best_v4.pt`
+4. Export ONNX or use ultralytics .pt directly
+5. Rebuild zip, have Stig upload
+6. Restart Astar Island poller: `python3 task3/solution.py --poll`
+7. Check Tripletex tunnel: `curl https://revenue-gale-lou-manor.trycloudflare.com/health`
 
 ## Leaderboard (19:45 CET)
 
