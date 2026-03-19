@@ -267,7 +267,10 @@ def plan_bot(bot, state, walls, item_set, impass, assigned_ids, reserved):
         return best
 
     drop_dist = manhattan(pos, drop)
-    should_deliver = useful > 0 and (full or not want or drop_dist <= nearest_item_dist())
+    num_bots = len(state.get("bots", []))
+    # Early delivery only for multi-bot maps — single bot should fill inventory first
+    early_deliver = drop_dist <= nearest_item_dist() if num_bots >= 3 else False
+    should_deliver = useful > 0 and (full or not want or early_deliver)
     if should_deliver:
         if pos == drop:
             reserved.add(pos)
