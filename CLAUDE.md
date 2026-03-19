@@ -1,11 +1,16 @@
 # NM i AI 2026 — Competition Repo
 
-## Rules
+## Git Rules
 
-- Push directly to main during competition (no PRs)
+- **Each agent owns their task directory.** Only the owner pushes changes to that dir.
+- Claude-5 and iClaw-E claim tasks via Discord at kickoff. Once claimed, only that agent touches `taskN/`.
+- `shared/` — coordinate via Discord before editing. Pull before push.
+- `docs/` — both agents update freely, but always pull first.
 - Prefix commits: `task1:`, `task2:`, `task3:`, `shared:`, `docs:`
-- Coordinate via Discord — call your task before touching it
-- Never force push
+- Never force push.
+- Always `git pull origin main --rebase` before pushing.
+- If rebase conflicts: `git stash && git pull origin main --rebase && git stash pop`, resolve, then push.
+- Small, frequent commits. Don't sit on uncommitted work.
 
 ## Docs Requirement
 
