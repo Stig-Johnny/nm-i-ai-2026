@@ -186,52 +186,50 @@ def execute_plan(base_url, token, plan, prompt):
 
 
 def create_employee(base_url, token, e):
-    # Try progressively simpler bodies if 422
-    bodies = []
-    
-    # Full body
-    b1 = {}
-    if "firstName" in e: b1["firstName"] = e["firstName"]
-    if "lastName" in e: b1["lastName"] = e["lastName"]
-    if "email" in e: b1["email"] = e["email"]
-    if e.get("dateOfBirth"): b1["dateOfBirth"] = e["dateOfBirth"]
-    if e.get("administrator") is True: b1["administrator"] = True
-    bodies.append(b1)
-    
-    # Without dateOfBirth
-    b2 = {k: v for k, v in b1.items() if k != "dateOfBirth"}
-    if b2 != b1: bodies.append(b2)
-    
-    # Without email
-    b3 = {k: v for k, v in b2.items() if k not in ("email", "administrator")}
-    bodies.append(b3)
-    
-    status, resp = 422, {}
-    for body in bodies:
-        status, resp = tx_post(base_url, token, "/employee", body)
-        vm = resp.get("validationMessages", []) if isinstance(resp, dict) else []
-        print(f"create_employee attempt {list(body.keys())}: {status} {[m.get('message','') for m in vm]}")
-        if status in (200, 201):
-            break
-    
+    # Required: firstName, lastName. NO 'administrator' field — use entitlements API instead.
+    body = {}
+    if "firstName" in e: body["firstName"] = e["firstName"]
+    if "lastName" in e: body["lastName"] = e["lastName"]
+    if "email" in e: body["email"] = e["email"]
+    if e.get("dateOfBirth"): body["dateOfBirth"] = e["dateOfBirth"]
+    if e.get("phoneNumber") or e.get("phone"):
+        body["phoneNumberMobile"] = e.get("phoneNumber") or e.get("phone")
+    # userType: EXTENDED allows all entitlements (administrator-equivalent)
+    if e.get("administrator"):
+        body["userType"] = "EXTENDED"
+
+    status, resp = tx_post(base_url, token, "/employee", body)
+    vm = resp.get("validationMessages", []) if isinstance(resp, dict) else []
+    print(f"create_employee: {status} {[m.get('message','') for m in vm]} resp={str(resp.get('value',{}))[:200]}")
+
+    if status not in (200, 201):
+        # Retry without optional fields that might cause 422
+        body2 = {k: v for k, v in body.items() if k in ("firstName", "lastName", "userType")}
+        status, resp = tx_post(base_url, token, "/employee", body2)
+        print(f"create_employee retry minimal: {status}")
+
     if status in (200, 201):
         emp_id = resp.get("value", {}).get("id")
-        # Set administrator role if requested
-        if emp_id and e.get("administrator") is True:
-            tx_put(base_url, token, f"/employee/{emp_id}", {
-                "id": emp_id, "firstName": e.get("firstName", ""), 
-                "lastName": e.get("lastName", ""), "administrator": True
-            })
+
+        # Grant ALL_PRIVILEGES (administrator) via entitlements API
+        if emp_id and e.get("administrator"):
+            r = requests.put(
+                f"{base_url}/employee/entitlement/:grantEntitlementsByTemplate",
+                auth=("0", token),
+                params={"employeeId": emp_id, "template": "ALL_PRIVILEGES"},
+                timeout=30
+            )
+            print(f"grantEntitlements ALL_PRIVILEGES: {r.status_code}")
+
         # Add employment if startDate provided
         if emp_id and e.get("startDate"):
-            from datetime import date
             emp_body = {
                 "employee": {"id": emp_id},
                 "startDate": e["startDate"],
             }
-            _, emp_resp = tx_post(base_url, token, f"/employee/{emp_id}/employment", emp_body)
+            _, emp_resp = tx_post(base_url, token, "/employee/employment", emp_body)
             print(f"create_employment: {_} {str(emp_resp)[:100]}")
-    
+
     return status in (200, 201)
 
 
