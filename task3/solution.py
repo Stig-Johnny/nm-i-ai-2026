@@ -48,6 +48,42 @@ STATIC_TERRAIN = {10, 5}   # Ocean, Mountain
 MOSTLY_STATIC = {4}        # Forest (can change but mostly stable)
 
 
+CACHE_DIR = "/tmp/astar_cache"
+
+
+def cache_path(round_id, seed_idx, kind="counts"):
+    import pathlib
+    pathlib.Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
+    return f"{CACHE_DIR}/round_{round_id}_seed_{seed_idx}_{kind}.json"
+
+
+def save_counts(round_id, seed_idx, counts, observed):
+    """Persist observation counts to disk so crashes don't lose query data."""
+    path = cache_path(round_id, seed_idx)
+    with open(path, "w") as f:
+        json.dump({
+            "counts": counts.tolist(),
+            "observed": observed.tolist(),
+        }, f)
+
+
+def load_counts(round_id, seed_idx, H, W):
+    """Load saved counts if they exist. Returns (counts, observed) or None."""
+    path = cache_path(round_id, seed_idx)
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        counts = np.array(d["counts"])
+        observed = np.array(d["observed"], dtype=bool)
+        if counts.shape == (H, W, NUM_CLASSES):
+            total = int(counts.sum())
+            print(f"  Loaded cached counts: {total} observations across {observed.sum()} cells")
+            return counts, observed
+    except (FileNotFoundError, KeyError, ValueError):
+        pass
+    return None
+
+
 def make_session(token):
     s = requests.Session()
     s.headers["Authorization"] = f"Bearer {token}"
@@ -326,8 +362,26 @@ def solve_explore(s, round_id, detail):
     print(f"Budget: {queries_left} queries remaining of {budget['queries_max']}")
 
     if queries_left == 0:
-        # No budget — just return. Priors already submitted by solve_with_priors.
-        print("No queries left — using previously submitted priors.")
+        # No new queries — but check if we have cached observations from a crashed run
+        print("No queries left — checking for cached observation data...")
+        recovered = False
+        for seed_idx in range(seeds):
+            cached = load_counts(round_id, seed_idx, H, W)
+            if cached and cached[0].sum() > 0:
+                counts, observed = cached
+                initial_raw = initial_states[seed_idx]["grid"] if seed_idx < len(initial_states) else None
+                if seed_idx < len(initial_states):
+                    pred = initial_grid_to_priors(initial_states[seed_idx]["grid"])
+                else:
+                    pred = np.full((H, W, NUM_CLASSES), 1.0 / NUM_CLASSES)
+                blend_observation_prior(counts, pred, H, W, initial_raw)
+                pred = np.maximum(pred, PROB_FLOOR)
+                pred = pred / pred.sum(axis=2, keepdims=True)
+                result = submit_prediction(s, round_id, seed_idx, pred.tolist())
+                print(f"  Seed {seed_idx}: recovered {int(counts.sum())} observations → {result}")
+                recovered = True
+        if not recovered:
+            print("  No cache found — priors already submitted, nothing to do.")
         return
 
     # Phase 1: full coverage positions (tiles 40×40 in 9 positions with 15×15 viewports)
@@ -343,13 +397,19 @@ def solve_explore(s, round_id, detail):
     # ── Phase 1: full coverage ──────────────────────────────────────────────
     for seed_idx in range(seeds):
         print(f"\n=== Seed {seed_idx} — Phase 1 ===")
-        counts = np.zeros((H, W, NUM_CLASSES))
-        observed = np.zeros((H, W), dtype=bool)
 
         # Get initial raw grid for this seed (used for alpha selection)
         initial_raw = None
         if seed_idx < len(initial_states):
             initial_raw = initial_states[seed_idx]["grid"]
+
+        # Load cached counts from previous run if available (crash recovery)
+        cached = load_counts(round_id, seed_idx, H, W)
+        if cached:
+            counts, observed = cached
+        else:
+            counts = np.zeros((H, W, NUM_CLASSES))
+            observed = np.zeros((H, W), dtype=bool)
 
         for qi, (vx, vy) in enumerate(coverage_positions[:phase1_per_seed]):
             try:
@@ -365,6 +425,8 @@ def solve_explore(s, round_id, detail):
             grid = result.get("grid", [])
             vp = result.get("viewport", {"x": vx, "y": vy, "w": 15, "h": 15})
             apply_observation(counts, observed, grid, vp, W, H, initial_raw)
+            # Save after every observation — crash-safe
+            save_counts(round_id, seed_idx, counts, observed)
 
             coverage = observed.mean() * 100
             ql = result.get("queries_used", "?")
@@ -438,6 +500,7 @@ def solve_explore(s, round_id, detail):
                 grid = result.get("grid", [])
                 vp = result.get("viewport", {"x": vx, "y": vy, "w": 15, "h": 15})
                 apply_observation(counts, observed, grid, vp, W, H, initial_raw)
+                save_counts(round_id, seed_idx, counts, observed)
 
                 # Reblend with updated counts
                 if seed_idx < len(initial_states):
