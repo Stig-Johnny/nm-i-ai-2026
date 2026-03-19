@@ -36,58 +36,95 @@ def preprocess(img_path, imgsz=640):
     return arr, orig_w, orig_h, scale, pad_x, pad_y
 
 
-def postprocess(output, orig_w, orig_h, scale, pad_x, pad_y, conf_thresh=0.25):
-    """Parse YOLOv8 ONNX output to bounding boxes.
+def nms(boxes, scores, iou_thresh=0.5):
+    """Non-Maximum Suppression. boxes: Nx4 (x1,y1,x2,y2), scores: N."""
+    if len(boxes) == 0:
+        return []
 
-    YOLOv8 ONNX output shape: [1, num_classes+4, num_detections]
-    First 4 rows: cx, cy, w, h (in input image coords)
-    Remaining rows: class confidences
-    """
-    predictions = output[0]  # [num_classes+4, num_detections]
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
 
-    if predictions.shape[0] > predictions.shape[1]:
-        predictions = predictions.T  # transpose if needed
+    order = scores.argsort()[::-1]
+    keep = []
 
-    num_detections = predictions.shape[1] if len(predictions.shape) == 2 else predictions.shape[0]
+    while len(order) > 0:
+        i = order[0]
+        keep.append(i)
+        if len(order) == 1:
+            break
 
-    # Handle different output formats
-    if len(predictions.shape) == 3:
-        predictions = predictions[0]  # remove batch dim
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
 
-    # predictions shape: [4+nc, num_boxes] or [num_boxes, 4+nc]
-    if predictions.shape[0] < predictions.shape[1]:
-        predictions = predictions.T  # → [num_boxes, 4+nc]
+        w = np.maximum(0, xx2 - xx1)
+        h = np.maximum(0, yy2 - yy1)
+        inter = w * h
+        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
 
-    boxes = predictions[:, :4]  # cx, cy, w, h
-    scores = predictions[:, 4:]  # class scores
+        mask = iou <= iou_thresh
+        order = order[1:][mask]
+
+    return keep
+
+
+def postprocess(output, orig_w, orig_h, scale, pad_x, pad_y, conf_thresh=0.5, iou_thresh=0.5):
+    """Parse YOLOv8 ONNX output [1, 5, 8400] to bounding boxes with NMS."""
+    preds = output[0]  # [1, 5, 8400] or [5, 8400]
+
+    if len(preds.shape) == 3:
+        preds = preds[0]  # [5, 8400]
+
+    # preds shape: [4+nc, 8400] → transpose to [8400, 4+nc]
+    if preds.shape[0] < preds.shape[1]:
+        preds = preds.T  # [8400, 5]
+
+    boxes_cxcywh = preds[:, :4]
+    scores = preds[:, 4:]
+    max_scores = scores.max(axis=1)
+
+    # Filter by confidence
+    mask = max_scores >= conf_thresh
+    boxes_cxcywh = boxes_cxcywh[mask]
+    max_scores = max_scores[mask]
+    cls_ids = scores[mask].argmax(axis=1)
+
+    if len(boxes_cxcywh) == 0:
+        return []
+
+    # Convert cxcywh to x1y1x2y2 in original image coords
+    cx, cy, bw, bh = boxes_cxcywh[:, 0], boxes_cxcywh[:, 1], boxes_cxcywh[:, 2], boxes_cxcywh[:, 3]
+    x1 = (cx - bw / 2 - pad_x) / scale
+    y1 = (cy - bh / 2 - pad_y) / scale
+    x2 = (cx + bw / 2 - pad_x) / scale
+    y2 = (cy + bh / 2 - pad_y) / scale
+
+    # Clamp
+    x1 = np.clip(x1, 0, orig_w)
+    y1 = np.clip(y1, 0, orig_h)
+    x2 = np.clip(x2, 0, orig_w)
+    y2 = np.clip(y2, 0, orig_h)
+
+    boxes_xyxy = np.stack([x1, y1, x2, y2], axis=1)
+
+    # NMS
+    keep = nms(boxes_xyxy, max_scores, iou_thresh)
 
     results = []
-    for i in range(len(boxes)):
-        max_score = float(scores[i].max())
-        if max_score < conf_thresh:
-            continue
-
-        cls_id = int(scores[i].argmax())
-        cx, cy, bw, bh = boxes[i]
-
-        # Convert from model coords to original image coords
-        x1 = (cx - bw / 2 - pad_x) / scale
-        y1 = (cy - bh / 2 - pad_y) / scale
-        w = bw / scale
-        h = bh / scale
-
-        # Clamp to image bounds
-        x1 = max(0, x1)
-        y1 = max(0, y1)
-        w = min(w, orig_w - x1)
-        h = min(h, orig_h - y1)
-
+    for i in keep:
+        bx1, by1, bx2, by2 = boxes_xyxy[i]
+        w = bx2 - bx1
+        h = by2 - by1
         if w > 2 and h > 2:
             results.append({
-                "bbox": [round(float(x1), 1), round(float(y1), 1),
+                "bbox": [round(float(bx1), 1), round(float(by1), 1),
                          round(float(w), 1), round(float(h), 1)],
-                "category_id": cls_id,
-                "confidence": round(max_score, 4)
+                "category_id": int(cls_ids[i]),
+                "confidence": round(float(max_scores[i]), 4)
             })
 
     return results
