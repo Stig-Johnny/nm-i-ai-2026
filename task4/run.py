@@ -1,142 +1,139 @@
 """
-Task 4 — NorgesGruppen: Grocery Shelf Object Detection
-======================================================
-YOLOv8-based object detection on Norwegian grocery shelf images.
+NorgesGruppen Grocery Shelf Object Detection
+NM i AI 2026 — Task 4
 
-Submission: zip this file + weights, upload to platform.
+Contract:
+  python run.py --input /data/images --output /output/predictions.json
 
-Execution environment:
-  - NVIDIA L4 GPU, 24GB VRAM
-  - PyTorch 2.6.0, ultralytics 8.1.0, ONNX Runtime GPU
-  - No network access, 300s timeout
-  - No os/subprocess/socket imports (use pathlib)
+Output: JSON array of {image_id, category_id, bbox: [x,y,w,h], score}
 
-Usage (in sandbox):
-    python run.py --input /data/images/ --output /tmp/output.json
+Safe imports only — no os, sys, subprocess, pickle, etc.
+Uses pathlib for file ops, json for output.
 """
 
+import argparse
 import json
-import sys
 from pathlib import Path
 
-# Detect if running in competition sandbox or locally
-try:
-    from ultralytics import YOLO
-    HAS_YOLO = True
-except ImportError:
-    HAS_YOLO = False
-    print("ultralytics not installed — using fallback")
+# All allowed: torch, ultralytics, numpy, PIL are pre-installed and not banned
+import torch
+from ultralytics import YOLO
 
 
-def detect_with_yolo(input_dir: Path, weights_path: Path) -> list:
-    """Run YOLOv8 detection on all images in input_dir."""
-    model = YOLO(str(weights_path))
-    results_list = []
+# ── Config ─────────────────────────────────────────────────────────────────────
+MODEL_FILE = "best.pt"          # Fine-tuned grocery model (primary)
+FALLBACK_MODEL = "yolov8s.pt"   # COCO pretrained fallback (detection-only)
+CONF_THRESH = 0.20              # Lower threshold → more recall for mAP
+IOU_THRESH = 0.50               # NMS IoU threshold
+IMG_SIZE = 1280                 # Higher res → better small product detection
+MAX_DET = 500                   # Max detections per image (shelves are dense)
+BATCH_SIZE = 4                  # Process 4 images at once on L4 GPU
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# ──────────────────────────────────────────────────────────────────────────────
 
-    image_files = sorted(
-        [f for f in input_dir.iterdir() if f.suffix.lower() in ('.jpg', '.jpeg', '.png')]
+
+def load_model():
+    """Load fine-tuned model if available, else COCO pretrained fallback."""
+    model_path = Path(MODEL_FILE)
+    if model_path.exists():
+        print(f"Loading fine-tuned model: {MODEL_FILE} on {DEVICE}")
+        model = YOLO(str(model_path))
+        model.to(DEVICE)
+        return model, False  # (model, is_fallback)
+    else:
+        print(f"Fine-tuned model not found. Using COCO pretrained fallback: {FALLBACK_MODEL}")
+        print("WARNING: Fallback will score 0 on classification (detection-only, category_id=0 for all)")
+        model = YOLO(FALLBACK_MODEL)
+        model.to(DEVICE)
+        return model, True
+
+
+def image_id_from_path(img_path: Path) -> int:
+    """Extract numeric ID: img_00042.jpg → 42"""
+    stem = img_path.stem  # e.g. "img_00042"
+    parts = stem.split("_")
+    return int(parts[-1])
+
+
+def predict_batch(model, image_paths: list, is_fallback: bool) -> list:
+    """Run inference on a batch of images, return flat list of predictions."""
+    predictions = []
+
+    # Run ultralytics inference (handles batching internally when given a list)
+    results = model.predict(
+        source=[str(p) for p in image_paths],
+        conf=CONF_THRESH,
+        iou=IOU_THRESH,
+        imgsz=IMG_SIZE,
+        max_det=MAX_DET,
+        verbose=False,
+        device=DEVICE,
     )
 
-    print(f"Processing {len(image_files)} images...")
+    for img_path, result in zip(image_paths, results):
+        img_id = image_id_from_path(img_path)
+        boxes = result.boxes
 
-    for img_path in image_files:
-        results = model(str(img_path), verbose=False)
+        if boxes is None or len(boxes) == 0:
+            continue
 
-        predictions = []
-        for r in results:
-            boxes = r.boxes
-            if boxes is not None:
-                for i in range(len(boxes)):
-                    # YOLO returns xyxy, convert to xywh for COCO format
-                    x1, y1, x2, y2 = boxes.xyxy[i].tolist()
-                    w = x2 - x1
-                    h = y2 - y1
-                    conf = float(boxes.conf[i])
-                    cls = int(boxes.cls[i])
+        # xyxy → convert to COCO xywh
+        xyxy = boxes.xyxy.cpu().tolist()
+        confs = boxes.conf.cpu().tolist()
+        classes = boxes.cls.cpu().tolist()
 
-                    predictions.append({
-                        "bbox": [round(x1, 1), round(y1, 1), round(w, 1), round(h, 1)],
-                        "category_id": cls,
-                        "confidence": round(conf, 4)
-                    })
+        for (x1, y1, x2, y2), conf, cls in zip(xyxy, confs, classes):
+            category_id = 0 if is_fallback else int(cls)
+            predictions.append({
+                "image_id": img_id,
+                "category_id": category_id,
+                "bbox": [round(x1, 2), round(y1, 2), round(x2 - x1, 2), round(y2 - y1, 2)],
+                "score": round(conf, 6),
+            })
 
-        results_list.append({
-            "image_name": img_path.name,
-            "predictions": predictions
-        })
-
-    return results_list
-
-
-def detect_fallback(input_dir: Path) -> list:
-    """Fallback: return empty predictions for all images."""
-    results_list = []
-    image_files = sorted(
-        [f for f in input_dir.iterdir() if f.suffix.lower() in ('.jpg', '.jpeg', '.png')]
-    )
-    for img_path in image_files:
-        results_list.append({
-            "image_name": img_path.name,
-            "predictions": []
-        })
-    return results_list
+    return predictions
 
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, help="Directory with shelf images")
-    parser.add_argument("--output", required=True, help="Output JSON path")
+    parser = argparse.ArgumentParser(description="NorgesGruppen grocery detection")
+    parser.add_argument("--input", required=True, help="Path to directory of shelf images")
+    parser.add_argument("--output", required=True, help="Path to write predictions.json")
     args = parser.parse_args()
 
-    input_dir = Path(args.input)
+    input_path = Path(args.input)
     output_path = Path(args.output)
 
-    # Look for weights in same directory as this script
-    script_dir = Path(__file__).parent
-    weights_path = script_dir / "best.pt"
+    # Gather and sort images
+    images = sorted(input_path.glob("img_*.jpg"))
+    print(f"Found {len(images)} images in {input_path}")
 
-    if HAS_YOLO and weights_path.exists():
-        print(f"Using YOLOv8 weights: {weights_path}")
-        results = detect_with_yolo(input_dir, weights_path)
-    elif HAS_YOLO:
-        # Use pretrained YOLOv8n as fallback (generic COCO detection)
-        print("No custom weights found, using YOLOv8n pretrained")
-        weights_path = script_dir / "yolov8n.pt"
-        if not weights_path.exists():
-            # In sandbox, try to use built-in
-            model = YOLO("yolov8n.pt")
-            results = []
-            image_files = sorted(
-                [f for f in input_dir.iterdir() if f.suffix.lower() in ('.jpg', '.jpeg', '.png')]
-            )
-            for img_path in image_files:
-                res = model(str(img_path), verbose=False)
-                preds = []
-                for r in res:
-                    if r.boxes is not None:
-                        for i in range(len(r.boxes)):
-                            x1, y1, x2, y2 = r.boxes.xyxy[i].tolist()
-                            preds.append({
-                                "bbox": [round(x1,1), round(y1,1), round(x2-x1,1), round(y2-y1,1)],
-                                "category_id": 0,  # Generic detection, no classification
-                                "confidence": round(float(r.boxes.conf[i]), 4)
-                            })
-                results.append({"image_name": img_path.name, "predictions": preds})
-        else:
-            results = detect_with_yolo(input_dir, weights_path)
-    else:
-        print("No YOLO available, using empty fallback")
-        results = detect_fallback(input_dir)
+    if not images:
+        print("No images found — writing empty predictions")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump([], f)
+        return
+
+    # Load model
+    model, is_fallback = load_model()
+
+    # Inference in batches
+    all_predictions = []
+    for i in range(0, len(images), BATCH_SIZE):
+        batch = images[i : i + BATCH_SIZE]
+        batch_preds = predict_batch(model, batch, is_fallback)
+        all_predictions.extend(batch_preds)
+        print(f"  Processed {min(i + BATCH_SIZE, len(images))}/{len(images)} images "
+              f"({len(batch_preds)} detections in batch)")
+
+    print(f"Total predictions: {len(all_predictions)}")
 
     # Write output
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w') as f:
-        json.dump(results, f)
+    with open(output_path, "w") as f:
+        json.dump(all_predictions, f)
 
-    total_preds = sum(len(r["predictions"]) for r in results)
-    print(f"Done: {len(results)} images, {total_preds} detections")
-    print(f"Output: {output_path}")
+    print(f"Predictions written to {output_path}")
 
 
 if __name__ == "__main__":
