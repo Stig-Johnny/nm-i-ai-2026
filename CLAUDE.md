@@ -24,6 +24,12 @@
 
 Docs auto-deploy to GitHub Pages on push. Keep them current so the whole team knows what's happening.
 
+**Use diagrams.** Mermaid is enabled. Add flowcharts, sequence diagrams, or C4 diagrams to explain:
+
+- Task solution architecture
+- Data flow (input → processing → output)
+- Decision logic for complex algorithms
+
 ## Coding Standards
 
 ### Code Structure
