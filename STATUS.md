@@ -1,4 +1,4 @@
-# Competition Status — Last Updated 2026-03-19 21:30 CET
+# Competition Status — Last Updated 2026-03-19 22:25 CET
 
 ## Leaderboard (19:45 CET)
 
@@ -8,7 +8,9 @@
 | 2 | Prompt Injection | 63.3 | --- | --- | 15.8 |
 | 1 | Slop Overflow | 100.0 | --- | --- | 33.3 |
 | 1 | 000110 000111 | --- | 100.0 | --- | 33.3 |
-| 14 | **Dashecorp (us)** | **46.8** | **---** | --- | **15.6** |
+| 26 | **Dashecorp (us)** | **47.6** | **---** | **39.6** | **29.1** |
+
+Top teams now have all 3 tasks scoring. #1 Companion at 67.5 (Detection 98.6, Tripletex 52.1, Astar 51.9).
 
 NorgesGruppen Detection NOW SCORING — 4 teams have mAP scores. We submit at midnight UTC.
 Astar Island leaderboard still says "hasn't started".
