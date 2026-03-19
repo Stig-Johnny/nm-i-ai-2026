@@ -4,16 +4,16 @@ Norway's National AI Championship — March 19-22, 2026.
 
 ## Competition Status
 
-**LIVE** — Competition started March 19 at 18:00 CET. 67 hours remaining.
+**LIVE** — Competition started March 19 at 18:00 CET. ~66 hours remaining.
 
 ## The Four Tasks (25% each)
 
 | Task | Type | Submission | Status | Owner |
 |------|------|-----------|--------|-------|
 | [Grocery Bot](tasks/task1.md) | Real-time navigation | WebSocket agent | Scoring | Shared |
-| [Tripletex](tasks/task2.md) | AI accounting agent | HTTPS endpoint (Cloud Run) | Blocked (GCP deploy) | iClaw-E |
-| [Astar Island](tasks/task3.md) | Norse world prediction | REST API | Waiting (no active rounds) | Claude-5 |
-| [NorgesGruppen](tasks/task4.md) | Object detection | ZIP upload | Not started | Unclaimed |
+| [Tripletex](tasks/task2.md) | AI accounting agent | HTTPS endpoint | Rank #1, score 0.29 | iClaw-E |
+| [Astar Island](tasks/task3.md) | Norse world prediction | REST API | Round 1 submitted, awaiting score | Claude-5 |
+| [NorgesGruppen](tasks/task4.md) | Object detection | ZIP upload | Training, submit at midnight | Claude-5 |
 
 ## Current Scores
 
@@ -27,9 +27,17 @@ Norway's National AI Championship — March 19-22, 2026.
 | Expert | 10 | 13 |
 | Nightmare | 20 | — |
 
-### Other Tasks
+### Tripletex
 
-No scores yet — waiting for deployment (Tripletex) and active rounds (Astar Island).
+**Rank #1**, score 0.29, 1/24 task types. Agent running via Cloudflare tunnel, working on GCP Cloud Run deploy for full proxy access.
+
+### Astar Island
+
+Round 1 submitted (all 5 seeds, 100% coverage). Awaiting score — round closes ~21:42 CET. Poller running for Round 2.
+
+### NorgesGruppen
+
+Training YOLOv8n single-class detector on 248 images. Detection-only scores up to 70%. Submit at midnight UTC when rate limit resets.
 
 ## Team
 

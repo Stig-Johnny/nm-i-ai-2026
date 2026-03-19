@@ -1,0 +1,6 @@
+path: /Users/post/repos/claude-5/repos/nm-i-ai-2026/data/yolo_detection
+train: train/images
+val: val/images
+
+nc: 1
+names: ['product']
