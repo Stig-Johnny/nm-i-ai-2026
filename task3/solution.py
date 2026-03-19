@@ -258,13 +258,19 @@ def main():
 
     if args.poll:
         print("Polling for active round...")
+        seen_rounds = set()
         while True:
-            r = find_active_round(s)
-            if r:
-                print(f"Round {r['round_number']} is active!")
-                detail = get_round_detail(s, r["id"])
-                solve_explore(s, r["id"], detail)
-                return
+            rounds = get_rounds(s)
+            for r in rounds:
+                if r.get("status") == "active" and r["id"] not in seen_rounds:
+                    seen_rounds.add(r["id"])
+                    print(f"\nRound {r['round_number']} is active!")
+                    detail = get_round_detail(s, r["id"])
+                    # Submit priors first (free), then explore
+                    print("Phase 1: submitting priors-based prediction...")
+                    solve_with_priors(s, r["id"], detail)
+                    print("Phase 2: exploring with queries...")
+                    solve_explore(s, r["id"], detail)
             time.sleep(30)
             print(".", end="", flush=True)
 
