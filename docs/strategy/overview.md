@@ -14,6 +14,56 @@ This has critical implications:
 
 **Conclusion:** A weak score on a skipped task is catastrophic. Breadth beats depth.
 
+## Team Architecture
+
+```mermaid
+C4Context
+    title NM i AI 2026 — Team Architecture
+
+    Person(stig, "Stig", "Human operator, platform access, submissions")
+
+    System(claude5, "Claude-5", "MacBook — primary coder, strategy, coordination")
+    System(iclawe, "iClaw-E", "Mac Mini M2 — parallel executor, research")
+
+    System_Ext(platform, "app.ainm.no", "Competition platform")
+    System_Ext(discord, "Discord", "#iclaw-e channel")
+
+    Rel(stig, platform, "Login, Vipps, submit repo URL")
+    Rel(claude5, platform, "CDP token → API → WebSocket games")
+    Rel(iclawe, platform, "CDP token → API → WebSocket games")
+    Rel(claude5, discord, "Coordinate tasks")
+    Rel(iclawe, discord, "Coordinate tasks")
+    Rel(claude5, iclawe, "Task delegation via Discord")
+```
+
+## Competition Flow
+
+```mermaid
+flowchart TD
+    A[18:15 — Tasks Revealed] --> B[Read all 3 task specs]
+    B --> C{Assign tasks}
+    C --> D[Claude-5: Task X]
+    C --> E[iClaw-E: Task Y]
+    C --> F[Task Z: whoever finishes first]
+
+    D --> G[Ship baseline — any score > 0]
+    E --> H[Ship baseline — any score > 0]
+
+    G --> I{All 3 tasks scored?}
+    H --> I
+    F --> I
+
+    I -->|No| J[Priority: get missing task to score > 0]
+    J --> I
+    I -->|Yes| K[Phase 2: Optimize lowest-scoring task]
+    K --> L[Iterate: improve score, push, test]
+    L --> M{Hours remaining?}
+    M -->|> 20h| K
+    M -->|< 20h| N[Phase 3: Final push on biggest gap]
+    N --> O[Clean up code for public repo]
+    O --> P[Submit repo URL before deadline]
+```
+
 ## Phase Plan
 
 ### Phase 1: First Blood (Hours 0-3)

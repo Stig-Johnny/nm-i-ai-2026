@@ -1,5 +1,27 @@
 # Game Protocol
 
+## Connection Flow
+
+```mermaid
+sequenceDiagram
+    participant Chrome
+    participant Agent
+    participant API as api.ainm.no
+    participant Game as game.ainm.no
+
+    Agent->>Chrome: CDP: get access_token cookie
+    Chrome-->>Agent: access_token (JWT)
+    Agent->>API: POST /games/request {map_id}
+    Note over Agent,API: Authorization: Bearer <token>
+    API-->>Agent: {ws_url, token}
+    Agent->>Game: WebSocket connect (wss://game.ainm.no/ws?token=...)
+    loop Each Round (300 total)
+        Game-->>Agent: game_state JSON
+        Agent->>Game: actions JSON
+    end
+    Game-->>Agent: game_over {score}
+```
+
 ## Connection
 
 ```
