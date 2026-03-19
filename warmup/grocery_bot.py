@@ -4,104 +4,95 @@ Grocery Bot — NM i AI 2026 Warm-up Challenge
 Optimized multi-bot grocery store agent.
 
 Strategy:
-  - Hungarian algorithm for optimal bot→item assignment
-  - BFS pathfinding with wall avoidance
-  - Order completion priority (+5/order >> +1/item)
-  - Item bundling (pick multiple items before drop-off)
-  - Cooperative collision avoidance via reservation table
+  - Per-bot greedy planner with active-only inventory (no preview pre-fetch)
+  - A* pathfinding — treats walls AND item cells as impassable
+  - Smarter approach-cell selection: BFS to nearest walkable adjacent cell
+  - Hungarian algorithm for multi-bot item assignment
+  - Reservation table for cooperative collision avoidance
+  - Order completion focus: +5 bonus per completed order
+
+Key constraints discovered:
+  - Items BLOCK movement — path through item cells is rejected by server
+  - pick_up requires Manhattan distance == 1 to item cell
+  - drop_off removes ONLY items matching active order; extras stay forever
+  - Shelves are infinite — same item_id reappears after pickup
+  - 60s cooldown between games; 40/hr; 300/day
 
 Run:
     python warmup/grocery_bot.py --url "wss://game.ainm.no/ws?token=TOKEN"
 """
 
 import asyncio
+import heapq
 import json
 import sys
 from collections import deque
-from typing import Any
 
-import numpy as np
 import websockets
 
 try:
+    import numpy as np
     from scipy.optimize import linear_sum_assignment
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
-    print("WARNING: scipy not installed — using greedy assignment instead of Hungarian")
 
 
 # ============================================================
 # Pathfinding
 # ============================================================
 
-def bfs(start: tuple, goal: tuple, blocked: set, width: int, height: int,
-        reserved: set = None) -> list[tuple]:
-    """BFS shortest path from start to goal, avoiding blocked cells and reserved cells.
+DIRS = [("move_up",(0,-1)), ("move_down",(0,1)), ("move_left",(-1,0)), ("move_right",(1,0))]
 
-    The goal cell itself is allowed even if in blocked set (for adjacency-based pickup,
-    we path to an adjacent cell instead).
+
+def heuristic(a, b):
+    return abs(a[0]-b[0]) + abs(a[1]-b[1])
+
+
+def astar(start, goal, impass, width, height, reserved=None):
+    """A* from start to goal. impass = frozenset of blocked cells. Returns first action or None."""
+    s, g = tuple(start), tuple(goal)
+    if s == g: return None
+    bl = reserved or set()
+    open_set = [(heuristic(s,g), 0, s, None)]
+    visited = {}
+    while open_set:
+        f, gc, pos, first = heapq.heappop(open_set)
+        if pos in visited: continue
+        visited[pos] = True
+        for act,(dx,dy) in DIRS:
+            n = (pos[0]+dx, pos[1]+dy)
+            if not (0 <= n[0] < width and 0 <= n[1] < height): continue
+            if n in impass: continue
+            if n in visited: continue
+            mv = first or act
+            ng = gc + 1
+            if n == g: return mv
+            if n not in bl:
+                heapq.heappush(open_set, (ng + heuristic(n,g), ng, n, mv))
+    return "wait"
+
+
+def best_approach_cell(bot_pos, item_pos, walls, item_set, width, height):
     """
-    if start == goal:
-        return [start]
-
-    queue = deque([(start, [start])])
-    visited = {start}
-
-    while queue:
-        pos, path = queue.popleft()
-        for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-            nx, ny = pos[0] + dx, pos[1] + dy
-            npos = (nx, ny)
-            if (0 <= nx < width and 0 <= ny < height
-                    and npos not in visited
-                    and (npos not in blocked or npos == goal)
-                    and (reserved is None or npos not in reserved)):
-                if npos == goal:
-                    return path + [npos]
-                visited.add(npos)
-                queue.append((npos, path + [npos]))
-
-    # No path found — try without reservations
-    if reserved:
-        return bfs(start, goal, blocked, width, height, reserved=None)
-    return [start]  # stuck
+    Find the nearest walkable cell adjacent to item_pos.
+    Excludes walls and other item cells (both block movement).
+    Returns the approach cell, or None if no walkable adjacent cell exists.
+    """
+    candidates = []
+    for _, (dx,dy) in DIRS:
+        n = (item_pos[0]+dx, item_pos[1]+dy)
+        if not (0 <= n[0] < width and 0 <= n[1] < height): continue
+        if n in walls: continue
+        if n in item_set and n != tuple(bot_pos): continue  # other items block
+        candidates.append((heuristic(bot_pos, n), n))
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][1]
 
 
-def bfs_to_adjacent(start: tuple, target: tuple, blocked: set, width: int, height: int,
-                    reserved: set = None) -> list[tuple]:
-    """BFS to a cell adjacent to target (for picking up items on shelves/walls)."""
-    # Find walkable cells adjacent to target
-    adj_cells = []
-    for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-        nx, ny = target[0] + dx, target[1] + dy
-        npos = (nx, ny)
-        if (0 <= nx < width and 0 <= ny < height and npos not in blocked):
-            adj_cells.append(npos)
-
-    if not adj_cells:
-        return [start]
-
-    # If already adjacent, done
-    if start in adj_cells:
-        return [start]
-
-    # BFS to closest adjacent cell
-    best_path = None
-    for adj in adj_cells:
-        path = bfs(start, adj, blocked, width, height, reserved)
-        if len(path) > 1 or path[0] == adj:
-            if best_path is None or len(path) < len(best_path):
-                best_path = path
-
-    return best_path if best_path else [start]
-
-
-def manhattan(a: tuple, b: tuple) -> int:
-    return abs(a[0] - b[0]) + abs(a[1] - b[1])
-
-
-def direction_from_move(current: tuple, next_pos: tuple) -> str:
+def direction_from_move(current, next_pos):
     dx = next_pos[0] - current[0]
     dy = next_pos[1] - current[1]
     if dx == 1: return "move_right"
@@ -111,250 +102,277 @@ def direction_from_move(current: tuple, next_pos: tuple) -> str:
     return "wait"
 
 
+def manhattan(a, b):
+    return abs(a[0]-b[0]) + abs(a[1]-b[1])
+
+
 # ============================================================
-# Assignment
+# Order helpers
 # ============================================================
 
-def assign_bots_to_targets(bots: list[dict], targets: list[dict],
-                           walls: set, width: int, height: int) -> dict:
-    """Assign bots to targets using Hungarian algorithm or greedy fallback.
+def order_remaining_types(order):
+    """Item types the order still needs (required - delivered), as a list."""
+    needed = list(order.get("items_required", []))
+    for d in order.get("items_delivered", []):
+        if d in needed: needed.remove(d)
+    return needed
 
-    Returns: {bot_id: target_dict}
+
+def inv_useful_count(order, inventory):
+    """How many inventory items match what the active order still needs."""
+    if not order: return 0
+    needed = order_remaining_types(order)
+    count = 0
+    inv = list(inventory)
+    for t in needed:
+        if t in inv:
+            count += 1; inv.remove(t)
+    return count
+
+
+def types_to_pick(active, preview, inventory):
     """
-    if not bots or not targets:
+    Types still needed — active first, preview fills spare slots (max 1 preview item).
+    Never over-picks: active items take priority, preview only fills last slot.
+    """
+    inv = list(inventory)
+    result = []
+
+    if active:
+        for t in order_remaining_types(active):
+            if t in inv:
+                inv.remove(t)
+            else:
+                result.append(t)
+
+    # Preview: only fill the last slot, only if we'd have space after all active items
+    slots_left = 3 - len(inventory) - len(result)
+    if preview and slots_left > 0:
+        for t in order_remaining_types(preview):
+            if slots_left <= 0: break
+            if t in inv:
+                inv.remove(t)
+            else:
+                result.append(t)
+                slots_left -= 1
+
+    return result
+
+
+# ============================================================
+# Assignment (Hungarian or greedy)
+# ============================================================
+
+def assign_bots_to_items(bots_needing_items, items):
+    """Assign bots to target items. Returns {bot_id: item_dict}."""
+    if not bots_needing_items or not items:
         return {}
-
-    n_bots = len(bots)
-    n_targets = len(targets)
-
-    # Build cost matrix (Manhattan distance)
-    cost = np.full((n_bots, n_targets), 9999.0)
-    for i, bot in enumerate(bots):
-        bpos = tuple(bot["position"])
-        for j, target in enumerate(targets):
-            tpos = tuple(target["position"])
-            cost[i][j] = manhattan(bpos, tpos)
-
     if HAS_SCIPY:
+        cost = np.array([[manhattan(tuple(b["position"]), tuple(it["position"]))
+                          for it in items]
+                         for b in bots_needing_items], dtype=float)
         row_idx, col_idx = linear_sum_assignment(cost)
-        return {bots[r]["id"]: targets[c] for r, c in zip(row_idx, col_idx) if cost[r][c] < 9990}
+        return {bots_needing_items[r]["id"]: items[c]
+                for r, c in zip(row_idx, col_idx)}
     else:
-        # Greedy: assign closest pairs
-        assignments = {}
-        used_targets = set()
-        for i, bot in enumerate(bots):
-            best_j = None
-            best_cost = 9999
-            for j, target in enumerate(targets):
-                if j not in used_targets and cost[i][j] < best_cost:
-                    best_cost = cost[i][j]
-                    best_j = j
-            if best_j is not None and best_cost < 9990:
-                assignments[bot["id"]] = targets[best_j]
-                used_targets.add(best_j)
+        # Greedy
+        assignments, used = {}, set()
+        for bot in bots_needing_items:
+            bpos = tuple(bot["position"])
+            best_j, best_d = None, 9999
+            for j, it in enumerate(items):
+                if j in used: continue
+                d = manhattan(bpos, tuple(it["position"]))
+                if d < best_d:
+                    best_d = d; best_j = j
+            if best_j is not None:
+                assignments[bot["id"]] = items[best_j]
+                used.add(best_j)
         return assignments
 
 
 # ============================================================
-# Game Logic
+# Per-bot planner
+# ============================================================
+
+def plan_bot(bot, state, walls, item_set, impass, assigned_ids, reserved):
+    """Return one action dict for this bot."""
+    bid   = bot["id"]
+    pos   = tuple(bot["position"])
+    inv   = list(bot["inventory"])
+
+    W     = state["grid"]["width"]
+    H     = state["grid"]["height"]
+    items = state.get("items", [])
+    orders = state.get("orders", [])
+    drop  = tuple(state.get("drop_off") or (state.get("drop_off_zones") or [[]])[0])
+
+    active  = next((o for o in orders if o.get("status")=="active"  and not o.get("complete")), None)
+    preview = next((o for o in orders if o.get("status")=="preview" and not o.get("complete")), None)
+
+    useful = inv_useful_count(active, inv)
+    want   = types_to_pick(active, preview, inv)
+    full   = len(inv) >= 3
+
+    def go(target):
+        mv = astar(pos, target, impass, W, H, reserved)
+        npos = _apply(pos, mv) if mv and mv != "wait" else pos
+        reserved.add(npos)
+        return {"bot": bid, "action": mv or "wait"}
+
+    def go_approach(item_pos):
+        app = best_approach_cell(pos, item_pos, walls, item_set, W, H)
+        if app is None:
+            reserved.add(pos); return {"bot": bid, "action": "wait"}
+        if pos == app:
+            reserved.add(pos); return None  # already there, caller handles pickup
+        mv = astar(pos, app, impass, W, H, reserved)
+        npos = _apply(pos, mv) if mv and mv != "wait" else pos
+        reserved.add(npos)
+        return {"bot": bid, "action": mv or "wait"}
+
+    # 1. At drop-off with useful items → deliver
+    if pos == drop and useful > 0:
+        reserved.add(pos)
+        return {"bot": bid, "action": "drop_off"}
+
+    # 2. Inventory full OR nothing left to pick → deliver
+    if useful > 0 and (full or not want):
+        if pos == drop:
+            reserved.add(pos)
+            return {"bot": bid, "action": "drop_off"}
+        return go(drop)
+
+    # 3. Adjacent wanted item → pick up immediately
+    if len(inv) < 3 and want:
+        for it in items:
+            if it["id"] in assigned_ids: continue
+            ip = tuple(it["position"])
+            if manhattan(pos, ip) != 1: continue
+            if it["type"] in want:
+                assigned_ids.add(it["id"])
+                reserved.add(pos)
+                return {"bot": bid, "action": "pick_up", "item_id": it["id"]}
+
+    # 4. Move toward nearest wanted item of ANY needed type (best approach cell)
+    if len(inv) < 3 and want:
+        want_set = set(want)
+        # Gather all candidate items for any wanted type
+        all_cands = []
+        for it in items:
+            if it["type"] not in want_set: continue
+            if it["id"] in assigned_ids: continue
+            ip = tuple(it["position"])
+            app = best_approach_cell(pos, ip, walls, item_set, W, H)
+            if app is None: continue
+            all_cands.append((manhattan(pos, app), it, app))
+        if not all_cands:
+            # Shelves refill — retry without assigned filter
+            for it in items:
+                if it["type"] not in want_set: continue
+                ip = tuple(it["position"])
+                app = best_approach_cell(pos, ip, walls, item_set, W, H)
+                if app is None: continue
+                all_cands.append((manhattan(pos, app), it, app))
+        if all_cands:
+            all_cands.sort(key=lambda x: x[0])
+            _, tgt, app = all_cands[0]
+            assigned_ids.add(tgt["id"])
+            tpos = tuple(tgt["position"])
+            # Already adjacent?
+            if manhattan(pos, tpos) == 1:
+                reserved.add(pos)
+                return {"bot": bid, "action": "pick_up", "item_id": tgt["id"]}
+            # BFS to the pre-computed approach cell
+            mv = astar(pos, app, impass, W, H, reserved)
+            npos = _apply(pos, mv) if mv and mv != "wait" else pos
+            reserved.add(npos)
+            return {"bot": bid, "action": mv or "wait"}
+
+    # 5. Fallback: deliver if anything useful
+    if useful > 0:
+        if pos == drop:
+            reserved.add(pos)
+            return {"bot": bid, "action": "drop_off"}
+        return go(drop)
+
+    reserved.add(pos)
+    return {"bot": bid, "action": "wait"}
+
+
+def _apply(pos, move):
+    if not move or not move.startswith("move_"): return pos
+    dx,dy = {"move_up":(0,-1),"move_down":(0,1),"move_left":(-1,0),"move_right":(1,0)}[move]
+    return (pos[0]+dx, pos[1]+dy)
+
+
+# ============================================================
+# GroceryAgent
 # ============================================================
 
 class GroceryAgent:
     def __init__(self):
-        self.walls: set = set()
-        self.width: int = 0
-        self.height: int = 0
-        self.round_num: int = 0
+        self.width = self.height = 0
+        self.walls = set()
 
-    def update_grid(self, grid: dict):
-        self.width = grid.get("width", 0)
-        self.height = grid.get("height", 0)
-        self.walls = set(tuple(w) for w in grid.get("walls", []))
-
-    def get_blocked(self, items: list, bot_positions: set) -> set:
-        """Build full blocked set: walls + item positions + other bot positions."""
-        blocked = set(self.walls)
-        for item in items:
-            blocked.add(tuple(item.get("position", [0, 0])))
-        blocked |= bot_positions
-        return blocked
-
-    def get_needed_items(self, orders: list, items: list, bot_inventories: dict) -> list:
-        """Get items needed for active orders, accounting for what bots already carry."""
-        needed_counts = {}
-        for order in orders:
-            if order.get("complete") or order.get("status") != "active":
-                continue
-            required = order.get("items_required", [])
-            delivered = order.get("items_delivered", [])
-            # Count remaining needed per type
-            from collections import Counter
-            req_counts = Counter(required)
-            del_counts = Counter(delivered)
-            for item_type, count in req_counts.items():
-                remaining = count - del_counts.get(item_type, 0)
-                if remaining > 0:
-                    needed_counts[item_type] = needed_counts.get(item_type, 0) + remaining
-
-        # Subtract items already in bot inventories
-        for bot_id, inv in bot_inventories.items():
-            for item_type in inv:
-                if item_type in needed_counts:
-                    needed_counts[item_type] = max(0, needed_counts[item_type] - 1)
-
-        # Filter items to those still needed
-        needed_items = []
-        type_taken = {}
-        for item in items:
-            itype = item.get("type")
-            if itype in needed_counts and needed_counts[itype] > type_taken.get(itype, 0):
-                needed_items.append(item)
-                type_taken[itype] = type_taken.get(itype, 0) + 1
-
-        return needed_items
-
-    def is_adjacent(self, pos: tuple, target: tuple) -> bool:
-        return manhattan(pos, target) == 1
-
-    def decide(self, state: dict) -> dict:
-        """Main decision function — returns actions for all bots."""
-        self.round_num = state.get("round", 0)
-
+    def decide(self, state):
         grid = state.get("grid", {})
         if grid:
-            self.update_grid(grid)
+            self.width  = grid.get("width", self.width)
+            self.height = grid.get("height", self.height)
+            self.walls  = set(map(tuple, grid.get("walls", [])))
 
-        bots = state.get("bots", [])
+        bots  = state.get("bots", [])
         items = state.get("items", [])
-        orders = state.get("orders", [])
-        drop_off = state.get("drop_off")
-        drop_off_zones = state.get("drop_off_zones", [])
 
-        if drop_off:
-            drop_offs = [tuple(drop_off)]
-        elif drop_off_zones:
-            drop_offs = [tuple(z) for z in drop_off_zones]
-        else:
-            drop_offs = []
+        item_set = set(map(tuple, (it["position"] for it in items)))
+        impass   = self.walls | item_set
+        reserved = set(map(tuple, (b["position"] for b in bots)))
 
-        # Build bot position set and inventory map
-        bot_positions = set(tuple(b["position"]) for b in bots)
-        bot_inventories = {b["id"]: b.get("inventory", []) for b in bots}
-
-        # Blocked = walls + items (items block movement)
-        blocked = self.get_blocked(items, set())  # don't block on bot positions for BFS
-
-        reserved = set()
+        assigned_ids = set()
         actions = []
-
-        # Separate bots by state
-        bots_to_pickup = []
-        bots_to_dropoff = []
-
-        for bot in bots:
-            inventory = bot.get("inventory", [])
-            if len(inventory) > 0:
-                bots_to_dropoff.append(bot)
-            else:
-                bots_to_pickup.append(bot)
-
-        # --- Bots heading to drop-off ---
-        for bot in bots_to_dropoff:
-            bpos = tuple(bot["position"])
-
-            if drop_offs:
-                closest_drop = min(drop_offs, key=lambda d: manhattan(bpos, d))
-            else:
-                actions.append({"bot": bot["id"], "action": "wait"})
-                continue
-
-            if bpos == closest_drop:
-                actions.append({"bot": bot["id"], "action": "drop_off"})
-            else:
-                path = bfs(bpos, closest_drop, blocked, self.width, self.height, reserved)
-                if len(path) > 1:
-                    next_pos = path[1]
-                    reserved.add(next_pos)
-                    actions.append({"bot": bot["id"], "action": direction_from_move(bpos, next_pos)})
-                else:
-                    actions.append({"bot": bot["id"], "action": "wait"})
-
-        # --- Bots picking up items ---
-        needed_items = self.get_needed_items(orders, items, bot_inventories)
-
-        if bots_to_pickup and needed_items:
-            targets = [{"id": i.get("id"), "type": i.get("type"),
-                        "position": i.get("position", [0, 0])}
-                       for i in needed_items]
-
-            assignment = assign_bots_to_targets(bots_to_pickup, targets,
-                                                 blocked, self.width, self.height)
-
-            for bot in bots_to_pickup:
-                bpos = tuple(bot["position"])
-                target = assignment.get(bot["id"])
-
-                if target is None:
-                    actions.append({"bot": bot["id"], "action": "wait"})
-                    continue
-
-                tpos = tuple(target["position"])
-
-                # If adjacent to item, pick it up
-                if self.is_adjacent(bpos, tpos):
-                    actions.append({"bot": bot["id"], "action": "pick_up",
-                                    "item_id": target["id"]})
-                else:
-                    # Path to adjacent cell (items are on shelves/walls, can't walk on them)
-                    path = bfs_to_adjacent(bpos, tpos, blocked, self.width, self.height, reserved)
-                    if len(path) > 1:
-                        next_pos = path[1]
-                        reserved.add(next_pos)
-                        actions.append({"bot": bot["id"],
-                                        "action": direction_from_move(bpos, next_pos)})
-                    else:
-                        actions.append({"bot": bot["id"], "action": "wait"})
-        else:
-            for bot in bots_to_pickup:
-                actions.append({"bot": bot["id"], "action": "wait"})
+        for bot in sorted(bots, key=lambda b: b["id"]):
+            a = plan_bot(bot, state, self.walls, item_set, impass, assigned_ids, reserved)
+            actions.append(a)
 
         return {"actions": actions}
 
 
 # ============================================================
-# WebSocket Client
+# WebSocket client
 # ============================================================
 
 agent = GroceryAgent()
 
 
-async def run(url: str):
-    print(f"Connecting to {url}")
+async def run(url):
+    print(f"Connecting to {url[:70]}...")
     async with websockets.connect(url) as ws:
+        print("Connected!")
+        rnd = 0
         async for message in ws:
             state = json.loads(message)
-            msg_type = state.get("type", "")
-
-            if msg_type == "game_over":
-                score = state.get("score", "?")
-                print(f"\nGame over — final score: {score}")
+            t = state.get("type")
+            if t == "game_over":
+                print(f"\nGame over! Score: {state.get('score',0)}"
+                      f" | Items: {state.get('items_delivered',0)}"
+                      f" | Orders: {state.get('orders_completed',0)}"
+                      f" | Rounds: {state.get('rounds_used',0)}")
                 break
-
-            action = agent.decide(state)
-            round_num = state.get("round", "?")
+            if t != "game_state": continue
+            rnd   = state.get("round", rnd)
             score = state.get("score", 0)
-            n_bots = len(state.get("bots", []))
-            n_items = len(state.get("items", []))
-
-            if round_num == 1 or (isinstance(round_num, int) and round_num % 50 == 0):
-                print(f"Round {round_num} | Score: {score} | Bots: {n_bots} | Items: {n_items}")
-
+            bots  = state.get("bots", [])
+            if rnd % 50 == 0:
+                invs = [b["inventory"] for b in bots]
+                print(f"Rnd {rnd:3d} | Score {score:3d} | inv={invs}")
+            action = agent.decide(state)
             await ws.send(json.dumps(action))
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", required=True, help="WebSocket URL with token")
+    parser.add_argument("--url", required=True)
     args = parser.parse_args()
     asyncio.run(run(args.url))
