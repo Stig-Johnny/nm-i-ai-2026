@@ -1,69 +1,80 @@
-# Competition Status — Last Updated 2026-03-19 22:45 CET
+# Competition Status — Last Updated 2026-03-19 23:15 CET
 
-## Leaderboard (19:45 CET)
+## OVERNIGHT: Internet may be down. Training runs locally.
+
+### What's running (no internet needed):
+- **v3 YOLOv8m training** at imgsz=1280, 200 epochs, ~15-30 min/epoch
+  - Weights saved to: `runs/detect/task4/runs/v3_medium_1280/weights/best.pt`
+  - Will copy to `task4/best_v3.pt` when done
+  - Script: `task4/train_v3.py`
+  - PID check: `ps aux | grep train_v3`
+
+### What needs internet (restart in morning):
+- **Astar Island poller:** `source .venv/bin/activate && python3 task3/solution.py --poll`
+- **Tripletex tunnel:** check `ssh -i ~/.ssh/mac-executor claude@100.92.170.124 "ps aux | grep cloudflared"`
+- **Submissions:** upload when internet returns
+
+## Leaderboard
 
 | # | Team | Tripletex | Detection | Astar | Total |
 |---|------|-----------|-----------|-------|-------|
-| 1 | Make No Mistakes | 100.0 | --- | --- | 25.0 |
-| 2 | Prompt Injection | 63.3 | --- | --- | 15.8 |
-| 1 | Slop Overflow | 100.0 | --- | --- | 33.3 |
-| 1 | 000110 000111 | --- | 100.0 | --- | 33.3 |
-| 12 | **Dashecorp (us)** | **47.6** | **62.2** | **39.6** | **49.8** |
+| 1 | Companion | 52.1 | 98.6 | 51.9 | 67.5 |
+| 12 | **Dashecorp** | **47.6** | **62.2** | **39.6** | **49.8** |
 
-#1 Companion at 67.5. Gap to top 10: ~5 points. Improvement paths: Detection (multi-class), Tripletex (more tasks), Astar (better observations).
+Gap to #1: 17.7 points. Gap to #10: ~5 points.
 
-NorgesGruppen Detection NOW SCORING — 4 teams have mAP scores. We submit at midnight UTC.
-Astar Island leaderboard still says "hasn't started".
+## Task Status
 
-## Active Tasks
+### Task 2: Tripletex (Owner: iClaw-E)
+- Score: 47.6 (6/30 task types, 6.50 raw)
+- Rate limited until midnight CET (00:00)
+- Tunnel: `https://revenue-gale-lou-manor.trycloudflare.com/solve`
+- Server: Mac Mini port 9001 (`uvicorn task2.solution:app`)
+- iClaw-E's git token expired — needs refresh
 
-### Task 1: Grocery Bot (WebSocket)
-- **Owner:** Shared
-- **Scores:** Easy 110, Medium 117, Hard 113, Expert 13
-- **Code:** `warmup/grocery_bot.py`, `warmup/run_game.py`
-- **Token automation:** Chrome CDP on port 9222 → `shared/token.py`
-- **Map UUIDs:** easy=3c7e90e6, medium=0aba093f, hard=9bb9b3de, expert=c6acd676, nightmare=8e5eeedd
+### Task 3: Astar Island (Owner: iClaw-E taking over)
+- Score: 39.6 (Round 1 priors-only)
+- Round 2: submitted (mostly priors-only, poller crashed mid-observation)
+- Poller: restart with `python3 task3/solution.py --poll`
+- Key bugs to fix: observation data persistence, frequency-based predictions
+- See docs/strategy/astar-island-mechanics.md for simulation rules
 
-### Task 2: Tripletex (HTTPS endpoint)
-- **Owner:** iClaw-E
-- **Score:** Rank #1, 0.29 (2/7 checks pass from format alone)
-- **Endpoint:** Cloudflare tunnel (DNS proxy issue — tx-proxy.ainm.no doesn't resolve outside GCP)
-- **Blocker:** Need GCP Cloud Run deploy for full proxy access. @gcplab.me account button inactive. Trying our `invotek-github-infra` GCP project.
-- **LLM approach:** Gemini via Vertex AI in Cloud Run (claude CLI doesn't work in containers)
-- **Sandbox:** `https://kkpqfuj-amager.tripletex.dev/v2` (works from anywhere)
+### Task 4: NorgesGruppen Detection (Owner: Claude-5)
+- Score: 62.2 (single-class detection only, mAP ~0.684)
+- v3 training running overnight: YOLOv8m, imgsz=1280, 200 epochs, 356 classes
+- Best weights: `runs/detect/task4/runs/v3_medium_1280/weights/best.pt`
+- Submission zip must use ONNX or ultralytics format
+- run.py at zip root, flat COCO JSON output: `{image_id, category_id, bbox, score}`
+- **BANNED IMPORTS:** os, sys, subprocess, pickle, shutil, etc. See CLAUDE.md
+- 3 submissions/day (resets midnight UTC = 01:00 CET)
+- Also have single-class ONNX model: `task4/best.onnx` (mAP50=0.82 val, scored 62.2)
 
-### Task 3: Astar Island (REST API)
-- **Owner:** Claude-5
-- **Code:** `task3/solution.py`
-- **Round 1:** Submitted all 5 seeds, 100% coverage, 45/50 queries. BUT second poller overwrote with priors-only. Awaiting score.
-- **Round closes:** ~21:42 CET
-- **Poller running:** Background task polls every 30s, skips rounds with existing queries
-- **API:** `https://api.ainm.no/astar-island/`
-- **Auth:** Bearer JWT from Chrome CDP cookie
-- **Terrain classes:** 0=Empty, 1=Settlement, 2=Port, 3=Ruin, 4=Forest, 5=Mountain. Raw grid: 10=Ocean, 11=Plains
+## Morning Checklist
 
-### Task 4: NorgesGruppen (ZIP upload)
-- **Owner:** Claude-5
-- **Code:** `task4/run.py` (submission), `task4/train_detection.py` (training)
-- **Training:** YOLOv8n single-class detection, epoch 31/80, best mAP50=0.82 (saved)
-- **Submission zip ready:** `norgesgruppen-submission.zip` (11MB) with trained best.pt
-- **Data:** `data/coco/train/` (248 images, 22.7k annotations, 356 categories)
-- **Submission limit:** 0/3 remaining today (burned on network errors). Resets midnight UTC (01:00 CET)
-- **Submit at 01:00 CET:** Package `task4/run.py` + `task4/best_detection.pt` as ZIP, Stig uploads
+1. Check v3 training: `cat runs/detect/task4/runs/v3_medium_1280/weights/best.pt` exists?
+2. Check v3 mAP: look at training output for `all ... mAP50` values
+3. If v3 mAP50 > 0.15: export ONNX, rebuild zip, submit
+4. If v3 still training: let it run, submit current single-class again
+5. Restart Astar poller
+6. Check Tripletex tunnel alive
+7. Read Discord for iClaw-E updates
+8. Check leaderboard
 
 ## Infrastructure
 
-- **Chrome CDP:** Port 9222, logged into app.ainm.no (kill all Chrome, relaunch with `--remote-debugging-port=9222` using copied profile dir)
-- **Python venv:** `.venv/` in repo root
-- **MCP docs:** `https://mcp-docs.ainm.no/mcp` (SSE-based, needs session init)
-- **GCP:** `gcloud` installed, project `invotek-github-infra`, only service accounts authed (need `gcloud auth login` for user access)
-- **Discord channels:** #iclaw-e=1482354822492455065, #human=1477261394666590328
+- **Chrome CDP:** Kill Chrome, relaunch: `pkill -9 "Google Chrome"; sleep 3; /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir="$(mktemp -d)" "https://app.ainm.no/challenge" &`
+- **Mac Mini SSH:** `ssh -i ~/.ssh/mac-executor claude@100.92.170.124`
+- **Tunnel check:** `curl https://revenue-gale-lou-manor.trycloudflare.com/health`
+- **GCP project:** `invotek-github-infra` (needs `gcloud auth login` for user access)
+- **Python venv:** `source .venv/bin/activate` in repo root
 
-## Key Learnings
+## Key Learnings (don't repeat these mistakes)
 
-- Astar Island rounds are admin-created on a schedule, not continuous
-- tx-proxy.ainm.no is GCP-internal DNS only
-- NorgesGruppen: 3 submissions/day, resets midnight UTC
-- 356 classes too sparse for 248 images — train single-class detection first (70% of score)
-- Grocery Bot: fleet coordination helps multi-bot but hurts single-bot Easy (126→110 regression)
-- Tripletex: returning correct format gets 2/7 checks free
+- NorgesGruppen output: flat COCO array `[{image_id, category_id, bbox, score}]` NOT nested
+- `import sys` triggers auto-ban — check CLAUDE.md banned imports list
+- ultralytics imports are fine (pre-installed in sandbox)
+- .pt pickle files allowed despite `pickle` being banned (scanner only checks .py source)
+- Astar Island: second poller overwrote good observations — save data to disk before submitting
+- Tripletex: bad runs never lower score — submit aggressively
+- Tripletex daily limit: 5 per task type per day, resets midnight CET
+- NorgesGruppen: 3 submissions per day, resets midnight UTC (01:00 CET)
