@@ -4,7 +4,7 @@
 
 | Task | Our Score | #1 Score | Gap | Status |
 |------|-----------|----------|-----|--------|
-| Tripletex | 47.4 | 100.0 (Make No Mistakes) | -52.6 | Active, iClaw-E pushing |
+| Tripletex | 47.6 | 100.0 | -52.4 | Active, iClaw-E pushing |
 | NorgesGruppen | --- | --- | N/A | Model trained, upload at 01:00 |
 | Astar Island | --- | --- | N/A | Round 1 submitted, not scored yet |
 | **Overall** | **14.9 (#6)** | **33.3 (#1)** | **-18.4** | |

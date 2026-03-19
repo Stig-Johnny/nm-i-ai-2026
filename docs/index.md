@@ -4,51 +4,43 @@ Norway's National AI Championship — March 19-22, 2026.
 
 ## Competition Status
 
-**LIVE** — Competition started March 19 at 18:00 CET. ~66 hours remaining.
+**LIVE** — #12 overall with 49.8 points. ~42 hours remaining.
 
 ## The Four Tasks (25% each)
 
-| Task | Type | Submission | Status | Owner |
-|------|------|-----------|--------|-------|
-| [Grocery Bot](tasks/task1.md) | Real-time navigation | WebSocket agent | Scoring | Shared |
-| [Tripletex](tasks/task2.md) | AI accounting agent | HTTPS endpoint | Rank #1, score 0.29 | iClaw-E |
-| [Astar Island](tasks/task3.md) | Norse world prediction | REST API | Round 1 submitted, awaiting score | Claude-5 |
-| [NorgesGruppen](tasks/task4.md) | Object detection | ZIP upload | Training, submit at midnight | Claude-5 |
+| Task | Type | Status | Score | Owner |
+|------|------|--------|-------|-------|
+| [Tripletex](tasks/task2.md) | AI accounting agent | Scoring, 6/30 task types | 47.6 | iClaw-E |
+| [NorgesGruppen](tasks/task4.md) | Object detection | Scored! Training v4 overnight | 62.2 | Claude-5 |
+| [Astar Island](tasks/task3.md) | Norse world prediction | Round 1+2 scored, poller for R3 | 39.6 | iClaw-E |
+| Grocery Bot | Warm-up only | Not in overall score | N/A | — |
 
-## Current Scores
+## Our Scores
 
-### Grocery Bot
+| Task | Normalized Score |
+|------|-----------------|
+| Tripletex | 47.6 |
+| NorgesGruppen | 62.2 |
+| Astar Island | 39.6 |
+| **Overall** | **49.8 (#12)** |
 
-| Map | Bots | Best Score |
-|-----|------|-----------|
-| Easy | 1 | 110 |
-| Medium | 3 | **117** |
-| Hard | 5 | 113 |
-| Expert | 10 | 13 |
-| Nightmare | 20 | — |
+## Overnight (March 19-20)
 
-### Tripletex
-
-**Rank #1**, score 0.29, 1/24 task types. Agent running via Cloudflare tunnel, working on GCP Cloud Run deploy for full proxy access.
-
-### Astar Island
-
-Round 1 submitted (all 5 seeds, 100% coverage). Awaiting score — round closes ~21:42 CET. Poller running for Round 2.
-
-### NorgesGruppen
-
-Training YOLOv8n single-class detector on 248 images. Detection-only scores up to 70%. Submit at midnight UTC when rate limit resets.
+- **v4 YOLOv8m training** running on MacBook MPS, ETA ~4 AM
+- **v5 run.py** ready with conf=0.001 + torch.load patch
+- **Astar poller** running on Mac Mini with crash-safe caching
+- **Tripletex** rate limits reset at midnight — iClaw-E handling
 
 ## Team
 
-- **Stig-Johnny** — human, account/submissions, platform access
-- **Claude-5** — AI agent, primary coder + strategy (MacBook)
-- **iClaw-E** — AI agent, parallel executor (Mac Mini M2)
+- **Stig-Johnny** — human, account/submissions
+- **Claude-5** — NorgesGruppen detection + infrastructure (MacBook)
+- **iClaw-E** — Tripletex + Astar Island (Mac Mini M2)
 
 ## Links
 
 - [Competition Platform](https://app.ainm.no)
-- [Docs](https://app.ainm.no/docs)
-- [Repo](https://github.com/Stig-Johnny/nm-i-ai-2026)
 - [Strategy](strategy/overview.md)
+- [Competition Plan](strategy/competition-plan.md)
 - [Coding Patterns](strategy/coding-patterns.md)
+- [Astar Mechanics](strategy/astar-island-mechanics.md)
