@@ -1,0 +1,209 @@
+{
+  "description": "Tracks every competition prompt, expected behavior, and best score achieved",
+  "prompts": [
+    {
+      "id": "R01",
+      "prompt": "Create the customer Brightstone Ltd with organization number 853284882. The address is Parkveien 61, 5003 Bergen. Email: post@brightstone.no.",
+      "task_type": "create_customer",
+      "lang": "EN",
+      "tier": 1,
+      "best_score": "8/8",
+      "status": "PERFECT",
+      "notes": "Address, email, org number all verified"
+    },
+    {
+      "id": "R02",
+      "prompt": "Erstellen Sie den Kunden Bergwerk GmbH mit der Organisationsnummer 946768693. Die Adresse ist Solveien 5, 3015 Drammen. E-Mail: post@bergwerk.no.",
+      "task_type": "create_customer",
+      "lang": "DE",
+      "tier": 1,
+      "best_score": "8/8",
+      "status": "PERFECT",
+      "notes": "Fixed 't Solveien' address bug"
+    },
+    {
+      "id": "R03",
+      "prompt": "Créez trois départements dans Tripletex : \"Økonomi\", \"Kvalitetskontroll\" et \"Markedsføring\".",
+      "task_type": "create_department",
+      "lang": "FR",
+      "tier": 1,
+      "best_score": "7/7",
+      "status": "PERFECT",
+      "notes": ""
+    },
+    {
+      "id": "R04",
+      "prompt": "Opprett tre avdelinger i Tripletex: \"Økonomi\", \"Markedsføring\" og \"Kvalitetskontroll\".",
+      "task_type": "create_department",
+      "lang": "NO",
+      "tier": 1,
+      "best_score": "7/7",
+      "status": "PERFECT",
+      "notes": ""
+    },
+    {
+      "id": "R05",
+      "prompt": "Create three departments in Tripletex: \"Innkjøp\", \"Drift\", and \"Kundeservice\".",
+      "task_type": "create_department",
+      "lang": "EN",
+      "tier": 1,
+      "best_score": "7/7",
+      "status": "PERFECT",
+      "notes": ""
+    },
+    {
+      "id": "R06",
+      "prompt": "Crea el producto \"Mantenimiento\" con número de producto 7266. El precio es 650 NOK sin IVA, utilizando la tasa estándar del 25 %.",
+      "task_type": "create_product",
+      "lang": "ES",
+      "tier": 1,
+      "best_score": "7/7",
+      "status": "PERFECT",
+      "notes": "Added priceIncludingVatCurrency"
+    },
+    {
+      "id": "R07",
+      "prompt": "Crea el proyecto \"Actualización Sierra\" vinculado al cliente Sierra SL (org. nº 953403188). El director del proyecto es Ana Romero (ana.romero@example.org).",
+      "task_type": "create_project",
+      "lang": "ES",
+      "tier": 1,
+      "best_score": "7/7",
+      "status": "PERFECT",
+      "notes": "Fixed PM name extraction (Ana Romero)"
+    },
+    {
+      "id": "R08",
+      "prompt": "Registrer leverandøren Sjøbris AS med organisasjonsnummer 811212717. E-post: faktura@sjbris.no.",
+      "task_type": "create_supplier",
+      "lang": "NO",
+      "tier": 1,
+      "best_score": "6/7",
+      "status": "PARTIAL",
+      "notes": "Consistently 6/7 — missing 1 check, unknown which field"
+    },
+    {
+      "id": "R09",
+      "prompt": "Wir haben einen neuen Mitarbeiter namens Anna Schneider, geboren am 6. August 2000. Bitte legen Sie ihn als Mitarbeiter mit der E-Mail anna.schneider@example.org und dem Startdatum 17. March 2026 an.",
+      "task_type": "create_employee",
+      "lang": "DE",
+      "tier": 1,
+      "best_score": "8/8",
+      "status": "PERFECT",
+      "notes": "DOB + startDate + employment all set"
+    },
+    {
+      "id": "R10",
+      "prompt": "Registrer en reiseregning for Magnus Haugen (magnus.haugen@example.org) for \"Kundebesøk Bergen\". Reisen varte 4 dager med diett (dagsats 800 kr). Utlegg: flybillett 5050 kr og taxi 750 kr.",
+      "task_type": "create_travel_expense",
+      "lang": "NO",
+      "tier": 1,
+      "best_score": "5.5/8",
+      "status": "PARTIAL",
+      "notes": "Added travelDetails + fixed flight category. Missing 2.5 checks — possibly per diem compensation vs cost"
+    },
+    {
+      "id": "R11",
+      "prompt": "Vi har mottatt faktura INV-2026-3624 fra leverandøren Tindra AS (org.nr 983514650) på 42100 kr inklusiv MVA. Beløpet gjelder kontortjenester (konto 6540). Registrer leverandørfakturaen med korrekt inngående MVA (25 %).",
+      "task_type": "register_supplier_invoice",
+      "lang": "NO",
+      "tier": 2,
+      "best_score": "8/8",
+      "status": "INCONSISTENT",
+      "notes": "Sometimes 8/8, sometimes 2/8. Sandbox-dependent. Using dual approach (supplierInvoice + voucher)"
+    },
+    {
+      "id": "R12",
+      "prompt": "Kjør lønn for Erik Nilsen (erik.nilsen@example.org) for denne måneden. Grunnlønn er 53350 kr. Legg til en engangsbonus på 11050 kr i tillegg til grunnlønnen.",
+      "task_type": "run_payroll",
+      "lang": "NO",
+      "tier": 2,
+      "best_score": "0/8",
+      "status": "BROKEN",
+      "notes": "salary/transaction API 422 in sandbox. Voucher fallback scores 0. Need employment record."
+    },
+    {
+      "id": "R13",
+      "prompt": "Opprett og send en faktura til kunden Testfirma AS (org.nr. 987654321) på 15000 NOK uten MVA. Fakturaen gjelder Konsulentbistand.",
+      "task_type": "create_invoice",
+      "lang": "NO",
+      "tier": 1,
+      "best_score": "7/7",
+      "status": "PARTIAL",
+      "notes": "Sometimes 6/7 — added invoice send. Need to verify improvement."
+    },
+    {
+      "id": "R14",
+      "prompt": "Registe 23 horas para Tiago Santos (tiago.santos@example.org) na atividade \"Analyse\" do projeto \"Integração de plataforma\" para Floresta Lda (org. nº 889395338). Taxa horária: 1050 NOK/h.",
+      "task_type": "project_invoice",
+      "lang": "PT",
+      "tier": 2,
+      "best_score": "8/8",
+      "status": "PERFECT",
+      "notes": "Hourly project invoice — creates project + timesheet + invoice"
+    },
+    {
+      "id": "R15",
+      "prompt": "Sett fastpris 374900 kr på prosjektet \"Datasikkerhet\" for Snøhetta AS (org.nr 840786692). Prosjektleder er Jonas Larsen. Fakturer kunden for 75 % av fastprisen som en delbetaling.",
+      "task_type": "project_invoice",
+      "lang": "NO",
+      "tier": 2,
+      "best_score": "8/8",
+      "status": "INCONSISTENT",
+      "notes": "Sometimes 8/8, sometimes 6/8. Fixed fixedprice (lowercase) + PM always set."
+    },
+    {
+      "id": "R16",
+      "prompt": "Create an invoice with three product lines with different VAT rates (25%, 15%, 0%)",
+      "task_type": "create_invoice",
+      "lang": "multi",
+      "tier": 2,
+      "best_score": "5/8",
+      "status": "PARTIAL",
+      "notes": "Products created with VAT, product codes extracted from descriptions. Need more testing."
+    },
+    {
+      "id": "R17",
+      "prompt": "Order with products → convert to invoice → register full payment",
+      "task_type": "invoice_with_payment",
+      "lang": "multi",
+      "tier": 2,
+      "best_score": "8/8",
+      "status": "PERFECT",
+      "notes": "Find-or-create products fixed this from 6.5 to 8/8"
+    },
+    {
+      "id": "R18",
+      "prompt": "Create accounting dimension with values + post voucher linked to dimension",
+      "task_type": "create_accounting_dimension",
+      "lang": "multi",
+      "tier": 2,
+      "best_score": "13/13",
+      "status": "PERFECT",
+      "notes": "Consistently 13/13"
+    }
+  ],
+  "known_issues": [
+    "run_payroll: salary/transaction needs employment record — 0/8 always",
+    "register_supplier_invoice: sandbox-dependent — postings have zero amounts in some sandboxes",
+    "create_travel_expense: 5.5/8 — travelDetails added, flight category fixed, but still not 8/8",
+    "create_supplier: consistently 6/7 — unknown missing field",
+    "create_invoice: sometimes 6/7 — added send, not yet verified"
+  ],
+  "fixes_applied": [
+    "Address regex: 'ist' → fixed ordering",
+    "PM name: allow lowercase words between keyword and name",
+    "Employee name: construct from firstName+lastName",
+    "Product: priceIncludingVatCurrency calculated",
+    "Product: accept productName, netPrice, unitPrice, number keys",
+    "Product: extract code from description parentheses",
+    "Invoice: create products per line with correct VAT",
+    "Invoice: find-or-create products (avoid duplicates)",
+    "Invoice: send after creation",
+    "Project: fixedprice (lowercase), PM always set",
+    "Travel: travelDetails (departure/return/destination)",
+    "Travel: multilingual flight keywords (Flug/avión/voo/vol)",
+    "Supplier invoice: dual approach (supplierInvoice + voucher)",
+    "Payment: calculate total incl VAT from netAmount",
+    "Accounting dimension: handle nested voucher data"
+  ]
+}

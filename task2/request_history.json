@@ -1,0 +1,99 @@
+[
+  {
+    "prompt": "Opprett ein ordre for kunden Strandvik AS (org.nr 911845016) med produkta Skylagring (7865) til 38500 kr og Datarådgjeving (3949) til 18500 kr. Konverter ordren til faktura og registrer full betaling.",
+    "task_type": "invoice_with_payment",
+    "success": true,
+    "errors": []
+  },
+  {
+    "prompt": "Registrer leverandøren Vestfjord AS med organisasjonsnummer 914908787. E-post: faktura@vestfjord.no.",
+    "task_type": "create_supplier",
+    "success": true,
+    "errors": [
+      "100"
+    ]
+  },
+  {
+    "prompt": "Erstellen Sie das Projekt \"Implementierung Eichenhof\" verknüpft mit dem Kunden Eichenhof GmbH (Org.-Nr. 887635463). Projektleiter ist Leon Richter (leon.richter@example.org).",
+    "task_type": "create_project",
+    "success": true,
+    "errors": [
+      "174"
+    ]
+  },
+  {
+    "prompt": "Sett fastpris 374900 kr på prosjektet \"Datasikkerhet\" for Snøhetta AS (org.nr 840786692). Prosjektleder er Jonas Larsen (jonas.larsen@example.org). Fakturer kunden for 75 % av fastprisen som en delbet",
+    "task_type": "project_invoice",
+    "success": true,
+    "errors": [
+      "206"
+    ]
+  },
+  {
+    "prompt": "Create an invoice for the customer Ridgepoint Ltd (org no. 885181066) with three product lines: Software License (7496) at 15050 NOK with 25% VAT, Training Session (9589) at 4900 NOK with 15% VAT (foo",
+    "task_type": "create_invoice",
+    "success": true,
+    "errors": [
+      "259"
+    ]
+  },
+  {
+    "prompt": "Crea y envía una factura al cliente Luna SL (org. nº 931597922) por 5450 NOK sin IVA. La factura es por Sesión de formación.",
+    "task_type": "create_invoice",
+    "success": true,
+    "errors": [
+      "124"
+    ]
+  },
+  {
+    "prompt": "Der Kunde Windkraft GmbH (Org.-Nr. 954808483) hat eine offene Rechnung über 47600 NOK ohne MwSt. für \"Systementwicklung\". Registrieren Sie die vollständige Zahlung dieser Rechnung.",
+    "task_type": "register_payment",
+    "success": true,
+    "errors": [
+      "180"
+    ]
+  },
+  {
+    "prompt": "Ejecute la nómina de María Rodríguez (maria.rodriguez@example.org) para este mes. El salario base es de 58750 NOK. Añada una bonificación única de 10750 NOK además del salario base.",
+    "task_type": "run_payroll",
+    "success": true,
+    "errors": [
+      "181",
+      "422"
+    ]
+  },
+  {
+    "prompt": "Crea una factura para el cliente Sierra SL (org. nº 832052582) con tres líneas de producto: Sesión de formación (6481) a 28400 NOK con 25 % IVA, Diseño web (5795) a 11400 NOK con 15 % IVA (alimentos),",
+    "task_type": "create_invoice",
+    "success": true,
+    "errors": [
+      "256"
+    ]
+  },
+  {
+    "prompt": "Erstellen Sie einen Auftrag für den Kunden Waldstein GmbH (Org.-Nr. 975687821) mit den Produkten Netzwerkdienst (4366) zu 32750 NOK und Beratungsstunden (3402) zu 17450 NOK. Wandeln Sie den Auftrag in",
+    "task_type": "invoice_with_payment",
+    "success": false,
+    "errors": [
+      "264"
+    ]
+  },
+  {
+    "prompt": "Processe o salário de Sofia Sousa (sofia.sousa@example.org) para este mês. O salário base é de 30200 NOK. Adicione um bónus único de 13750 NOK além do salário base.",
+    "task_type": "run_payroll",
+    "success": true,
+    "errors": [
+      "164",
+      "422"
+    ]
+  },
+  {
+    "prompt": "Processe o salário de Lucas Santos (lucas.santos@example.org) para este mês. O salário base é de 59600 NOK. Adicione um bónus único de 12900 NOK além do salário base.",
+    "task_type": "run_payroll",
+    "success": true,
+    "errors": [
+      "166",
+      "422"
+    ]
+  }
+]
