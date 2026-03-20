@@ -450,3 +450,34 @@ def test_C06_accounting_dimension_nested_voucher():
     assert result == True
     vouch_posts = posts(mock, "/ledger/voucher")
     assert len(vouch_posts) == 1, "Should create voucher even when data is nested"
+
+
+def test_C07_invoice_multi_vat_de():
+    """Competition 01:53: Invoice with 3 lines at different VAT rates (scored 3/8).
+    LLM parses this — we test the handler directly with expected LLM output."""
+    from task2.solution import handle_create_invoice
+    mock = APIMock()
+    entities = {
+        "customerName": "Brückentor GmbH",
+        "customerOrgNumber": "804379010",
+        "lines": [
+            {"description": "Schulung", "productCode": "2626", "unitPrice": 17300, "count": 1, "vatRate": 25},
+            {"description": "Beratungsstunden", "productCode": "7746", "unitPrice": 12850, "count": 1, "vatRate": 15},
+            {"description": "Cloud-Speicher", "productCode": "5675", "unitPrice": 7050, "count": 1, "vatRate": 0},
+        ],
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        result = handle_create_invoice("https://mock/v2", "tok", entities)
+    assert result == True
+    prod_posts = posts(mock, "/product")
+    assert len(prod_posts) == 3, f"Expected 3 products, got {len(prod_posts)}"
+    ord_posts = posts(mock, "/order")
+    assert len(ord_posts) == 1
+    order_lines = ord_posts[0][2].get("orderLines", [])
+    assert len(order_lines) == 3, f"Expected 3 order lines, got {len(order_lines)}"
+    vat_ids = [ol.get("vatType", {}).get("id") for ol in order_lines]
+    assert 3 in vat_ids, f"Missing 25% VAT (id=3): {vat_ids}"
+    assert 31 in vat_ids, f"Missing 15% VAT (id=31): {vat_ids}"
+    assert 6 in vat_ids, f"Missing 0% VAT (id=6): {vat_ids}"

@@ -706,6 +706,9 @@ def handle_create_invoice(base_url, token, e):
 
     ensure_bank_account(base_url, token)
 
+    # VAT type mapping: percentage → Tripletex outgoing VAT type ID
+    NOK_VAT_OUT = {"25": 3, "15": 31, "12": 32, "0": 6}
+
     # Create customer
     cust_name = e.get("customerName", "Customer")
     cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
@@ -723,11 +726,33 @@ def handle_create_invoice(base_url, token, e):
     order_lines = []
     for l in lines:
         price = float(l.get("unitPrice") or l.get("unitPriceExcludingVatCurrency") or l.get("amount") or 0)
-        order_lines.append({
+        line = {
             "description": l.get("description", "Service"),
             "unitPriceExcludingVatCurrency": price,
             "count": float(l.get("count") or l.get("quantity") or 1),
-        })
+        }
+        # Set VAT type per line if specified
+        vat_rate = l.get("vatRate") if l.get("vatRate") is not None else l.get("vatType")
+        if vat_rate is not None:
+            vat_pct = str(vat_rate).replace("%", "").strip().split(".")[0]
+            line["vatType"] = {"id": NOK_VAT_OUT.get(vat_pct, 3)}
+        # Create product if product code specified
+        prod_code = l.get("productCode") or l.get("productNumber")
+        if prod_code:
+            prod_body = {
+                "name": l.get("description", "Product"),
+                "number": str(prod_code),
+                "priceExcludingVatCurrency": price,
+            }
+            if vat_rate is not None:
+                vat_pct2 = str(vat_rate).replace("%", "").strip().split(".")[0]
+                prod_body["vatType"] = {"id": NOK_VAT_OUT.get(vat_pct2, 3)}
+            st_p, resp_p = tx_post(base_url, token, "/product", prod_body)
+            prod_id = resp_p.get("value", {}).get("id")
+            if prod_id:
+                line["product"] = {"id": prod_id}
+            print(f"create product '{prod_code}': {st_p}")
+        order_lines.append(line)
     if not order_lines:
         order_lines = [{"description": "Service", "unitPriceExcludingVatCurrency": 0.0, "count": 1.0}]
 
