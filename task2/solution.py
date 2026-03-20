@@ -1042,7 +1042,7 @@ def handle_register_supplier_invoice(base_url, token, e):
     inv_date = e.get("invoiceDate") or today
     inv_due = e.get("invoiceDueDate") or str(date.today() + timedelta(days=30))
 
-    # Create supplier invoice with amountCurrency (drives posting amounts)
+    # Create supplier invoice — try with amountCurrency first (competition sandbox), fallback without
     si_body = {
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
@@ -1061,6 +1061,13 @@ def handle_register_supplier_invoice(base_url, token, e):
 
     st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
     print(f"supplierInvoice: {st} {str(resp)[:200]}")
+
+    # If 500 (amountCurrency not supported), retry without it
+    if st == 500:
+        si_body.pop("amountCurrency", None)
+        si_body.pop("currency", None)
+        st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
+        print(f"supplierInvoice (retry): {st} {str(resp)[:200]}")
 
     if st in (200, 201):
         return True
