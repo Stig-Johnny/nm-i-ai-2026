@@ -1441,7 +1441,7 @@ def handle_project_invoice(base_url, token, e):
     emp_id = get_or_create_employee(base_url, token, name=emp_name, email=emp_email)
 
     # Step 3: Create project
-    proj_name = e.get("projectName", "Project")
+    proj_name = e.get("projectName") or e.get("name") or e.get("project") or "Project"
     proj_body = {
         "name": proj_name,
         "startDate": today,
