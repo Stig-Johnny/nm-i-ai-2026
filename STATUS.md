@@ -1,65 +1,60 @@
-# Competition Status — Last Updated 2026-03-20 11:30 CET
+# Competition Status — Last Updated 2026-03-20 14:00 CET
 
 ## ⚠️ REPO IS PRIVATE — MUST MAKE PUBLIC BEFORE SUNDAY 15:00 CET
 ```bash
 gh repo edit Stig-Johnny/nm-i-ai-2026 --visibility public --accept-visibility-change-consequences
 ```
 
-## NorgesGruppen: 0.8927 mAP — RANK #4 of 136 teams!
+## Position: #46 overall, 60.8 points (~29 hours remaining)
 
 ## Our Scores
 
-| Task | Score | Notes |
-|------|-------|-------|
-| Tripletex | 44.3 | 8/30 task types, Tier 2 just opened (2× multiplier) |
-| NorgesGruppen | 62.0 | v4 multi-class ONNX submitted, awaiting result |
-| Astar Island | 61.6 | Round 4 scored 57.8, big improvement from priors-only |
-| **Overall** | **56.0 (#58)** | |
+| Task | Score | Rank on Task | Notes |
+|------|-------|-------------|-------|
+| NorgesGruppen | 0.8974 mAP | #15 of 148 | Ensemble v5l+v8x, WBF ready for tomorrow |
+| Tripletex | 23.6 | ~#50 | Claude-4 working on T2 task types |
+| Astar Island | 61.6 | ~#40 | iClaw-E improved priors, poller for Round 6+ |
+
+## Overnight Training (Vast.ai RTX 4090, ~$0.24/hr)
+
+- **YOLOv8x@1920** training. Epoch 32, mAP50=0.629, climbing.
+- ETA: ~2-3 AM CET (early stopping ~epoch 100-150)
+- Auto-cleanup cron running to prevent disk full
+- Download when done: `scp -P 33757 -i ~/.ssh/id_ed25519 root@ssh7.vast.ai:/root/runs/detect/runs/cloud_1920/weights/best.pt task4/best_1920.pt`
+- Then destroy instance
+
+## Tomorrow Plan (6 NorgesGruppen slots)
+
+| Slot | What | Files |
+|------|------|-------|
+| 1 | v8x@1920 single model | run.py + best_1920.onnx |
+| 2 | WBF ensemble v5l@1280 + v8x@1280 + v8x@1920 | run_wbf.py + 3 models |
+| 3 | WBF ensemble + flip TTA | run_wbf.py (already has TTA) |
+| 4-6 | Variants based on results | |
+
+## Key Files
+
+| File | Description |
+|------|-------------|
+| `task4/run_wbf.py` | WBF ensemble + TTA (best approach) |
+| `task4/run_sahi.py` | SAHI tiled inference (needs timeout fix) |
+| `task4/best_v5_1280.onnx` | YOLOv8l@1280, scored 0.8927 |
+| `task4/best_v8x.onnx` | YOLOv8x@1280 FP16, scored 0.8928 |
+| `task4/best_v5_640.onnx` | YOLOv8l@640 (for SAHI tiles) |
+| `task4/cloud_train.sh` | Cloud GPU training script |
+| `task4/best_1920.pt` | (downloading after training) |
 
 ## Task Ownership
 
 | Task | Owner | Status |
 |------|-------|--------|
-| Tripletex | **Claude-4** (taking over) | Issue #21 has full briefing |
-| Astar Island | **iClaw-E** | Focused 100% on rounds |
-| NorgesGruppen | **Claude-5** | v4 submitted, training improvements |
+| NorgesGruppen | Claude-5 | Cloud training overnight, WBF ready |
+| Tripletex | Claude-4 | Fixing T2 task types, server on Mac Mini |
+| Astar Island | iClaw-E | Improved priors, poller for Round 6+ |
 
-## Active Infrastructure
+## Infrastructure
 
-- **Tripletex server:** Mac Mini port 9001, tunnel `revenue-gale-lou-manor.trycloudflare.com`
-- **Astar poller:** Running on Claude-5 MacBook (`python3 task3/solution.py --poll`)
-- **Mac Mini SSH:** `ssh -i ~/.ssh/mac-executor claude@100.92.170.124`
-
-## NorgesGruppen Detection
-
-- v4 YOLOv8m multi-class (356 categories) trained overnight
-- ONNX export, 100MB, conf=0.001, flat COCO output
-- Submitted — awaiting result
-- Previous score: 62.2 (single-class detection only)
-- Expected improvement from multi-class classification (30% weight)
-- 2 submissions remaining today (resets midnight UTC)
-
-## Tripletex (Issue #21)
-
-- Claude-4 taking over from iClaw-E
-- Server stays on Mac Mini — Claude-4 pushes code via PR
-- iClaw-E restarts server when PRs merge
-- Tier 2 opened (2× multiplier) — big scoring opportunity
-- 8/30 task types working, many more to implement
-
-## Astar Island
-
-- iClaw-E owns this 100%
-- Round 4 scored 57.8 (best so far)
-- Round 5 submitted, awaiting score
-- Crash-safe observation caching working
-- Calibrated priors from Round 1 ground truth
-- Poller auto-detects new rounds
-
-## Key Info for New Sessions
-
-- Read `CLAUDE.md` for coding rules and banned imports
-- Branch protection on main — use PRs
-- `./scripts/check-submission.sh task4/run.py` before any NorgesGruppen zip
-- Banned imports: os, sys, subprocess, pickle, shutil, etc. (full list in CLAUDE.md)
-- Competition deadline: March 22, 15:00 CET
+- **Vast.ai GPU:** host:103274 Ukraine, ssh -p 33757 root@ssh7.vast.ai. DESTROY after downloading weights.
+- **Tripletex tunnel:** revenue-gale-lou-manor.trycloudflare.com (Mac Mini port 9001)
+- **Mac Mini SSH:** ssh -i ~/.ssh/mac-executor claude@100.92.170.124
+- **Repo:** PRIVATE. Make public before Sunday 15:00 CET.

@@ -10,3 +10,13 @@ build/
 *.log
 models/
 checkpoints/
+
+# Model weights (too large for git)
+*.pt
+*.onnx
+*.zip
+yolov8*.pt
+
+# Training data and runs
+data/
+runs/
