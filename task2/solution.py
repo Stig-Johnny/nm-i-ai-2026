@@ -677,7 +677,7 @@ def handle_create_project(base_url, token, e):
 
     # Find or create customer
     customer_id = None
-    cust_name = e.get("customerName")
+    cust_name = e.get("customerName") or e.get("customer")
     cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
     if cust_org or cust_name:
         customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
@@ -812,7 +812,7 @@ def handle_create_invoice(base_url, token, e):
     inv_date = e.get("invoiceDate") or e.get("orderDate") or today
     inv_due = e.get("invoiceDueDate") or e.get("dueDate") or str(date.today() + timedelta(days=14))
     st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
-                               params={"invoiceDate": inv_date, "sendToCustomer": "false"})
+                               params={"invoiceDate": inv_date, "invoiceDueDate": inv_due, "sendToCustomer": "false"})
     invoice_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
     print(f"order->invoice: {st_inv} id={invoice_id}")
 
@@ -1367,7 +1367,7 @@ def handle_create_order(base_url, token, e):
     today = str(date.today())
     due = str(date.today() + timedelta(days=30))
 
-    cust_name = e.get("customerName")
+    cust_name = e.get("customerName") or e.get("customer")
     cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
     customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
     if not customer_id:
@@ -1461,7 +1461,7 @@ def handle_project_invoice(base_url, token, e):
     today = str(date.today())
 
     # Step 1: Create customer
-    cust_name = e.get("customerName")
+    cust_name = e.get("customerName") or e.get("customer")
     cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
     customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
 
