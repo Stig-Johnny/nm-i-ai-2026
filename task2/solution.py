@@ -27,7 +27,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 PORT = int(os.environ.get("PORT", 8080))
-CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "claude")
+CLAUDE_PATH = os.environ.get("CLAUDE_PATH", os.path.expanduser("~/.local/bin/claude"))
 CACHE_DIR = Path(os.environ.get("CACHE_DIR", "/tmp/tripletex-cache"))
 CACHE_DIR.mkdir(exist_ok=True)
 LOG_DIR = Path(os.environ.get("LOG_DIR", "/tmp/tripletex-requests"))
@@ -64,6 +64,7 @@ Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk
 {
   "task_type": "one of: create_employee, create_customer, create_supplier, create_product, create_department, create_project, create_invoice, create_travel_expense, delete_travel_expense, register_payment, register_supplier_invoice, run_payroll, create_credit_note, update_employee, update_customer, create_contact, create_order, invoice_with_payment, project_invoice, reverse_voucher, delete_entity, bank_reconciliation, unknown",
   // Use 'project_invoice' when the task involves registering hours on a project AND generating an invoice based on those hours
+  // Use 'create_accounting_dimension' when creating free accounting dimensions with values and/or posting vouchers linked to dimension values
   "entities": {
     // ALL relevant data extracted from the prompt
     // Names: firstName, lastName (split properly)
@@ -122,7 +123,7 @@ def regex_parse(prompt):
         return m.group(0) if m else None
 
     def find_org(t):
-        m = re.search(r'(?:org\.?\s*(?:nr|n[º°]|nummer|number)\.?\s*:?\s*|organisasjonsnummer\s+|Organisationsnummer\s+|organization\s+number\s+)(\d{6,})', t, re.I)
+        m = re.search(r'(?:org\.?\s*(?:nr|n[º°]|nummer|number)\.?\s*:?\s*|organisasjonsnummer\s+|Organisationsnummer\s+|organization\s+number\s+|numéro\s+d.organisation\s+|número\s+de\s+organiza\w+\s+)(\d{6,})', t, re.I)
         return m.group(1) if m else None
 
     def find_amount(t, *keywords):
@@ -141,7 +142,7 @@ def regex_parse(prompt):
         return None
 
     def find_address(t):
-        m = re.search(r'(?:adress[ea]|address|Adresse)\s+(?:ist|er|is|es|:)?\s+(.+?)(?:\.|$)', t, re.I)
+        m = re.search(r"(?:adress[ea]|address|Adresse|L'adresse)\s+(?:ist|er|is|es|est|:)?\s+(.+?)(?:\.|$)", t, re.I)
         if not m: return None
         addr_str = m.group(1)
         # Try "Street, PostalCode City" pattern
@@ -347,29 +348,8 @@ def parse_with_claude(prompt, file_texts):
     import time as _time
     start = _time.time()
 
-    # Complexity check: long prompts or multi-action prompts go straight to LLM
-    import re as _re
-    # Strip emails before counting action words (avoids "faktura@..." false positive)
-    prompt_no_email = _re.sub(r'[\w.+-]+@[\w.-]+', '', prompt.lower())
-    action_words = len(_re.findall(r'\b(?:opprett|create|registrer|registe|slett|delete|send|generer|generate|gere|faktura|fatura|invoice|rechnung|factura|betaling|payment|oppdater|update|reverser|reverse|kjør|run|konverter|convert|créez|erstellen|crea|envoyez|senden)\b', prompt_no_email))
-    is_complex = len(prompt) > 200 or action_words >= 2 or bool(file_texts)
-
-    if not is_complex:
-        regex_result = regex_parse(prompt)
-        if regex_result:
-            task_type = regex_result.get("task_type", "unknown")
-            if task_type != "unknown":
-                entities = regex_result.get("entities", {})
-                filled = sum(1 for v in entities.values() if v is not None and v != "" and v != [] and v != {})
-                total = len(entities)
-                if filled >= max(1, total * 0.4):
-                    print(f"REGEX PARSE: {task_type} ({filled}/{total} fields) (0ms)")
-                    _log_request(prompt, file_texts, regex_result, True, _time.time() - start)
-                    return regex_result
-                else:
-                    print(f"REGEX WEAK: {task_type} only {filled}/{total} fields — falling through to LLM")
-    else:
-        print(f"COMPLEX PROMPT ({len(prompt)} chars, {action_words} actions) — using LLM")
+    # Always use LLM for parsing — regex is fragile across 7 languages
+    print(f"LLM PARSE: {len(prompt)} chars")
 
     full_prompt = prompt
     if file_texts:
@@ -1435,6 +1415,69 @@ def handle_project_invoice(base_url, token, e):
     return True
 
 
+def handle_create_accounting_dimension(base_url, token, e):
+    """Create a free accounting dimension with values, then post a voucher linked to it."""
+    today = str(date.today())
+
+    dim_name = e.get("dimensionName") or e.get("dimension", {}).get("name", "Dimension")
+    dim_values = e.get("dimensionValues") or e.get("dimension", {}).get("values", [])
+
+    # Step 1: Create the dimension
+    st, resp = tx_post(base_url, token, "/ledger/accountingDimensionName", {"dimensionName": dim_name})
+    dim_id = resp.get("value", {}).get("id")
+    dim_index = resp.get("value", {}).get("dimensionIndex", 1)
+    print(f"create dimension '{dim_name}': {st} id={dim_id} index={dim_index}")
+
+    # Step 2: Create dimension values
+    value_ids = {}
+    for val_name in dim_values:
+        st_v, resp_v = tx_post(base_url, token, "/ledger/accountingDimensionValue", {
+            "displayName": val_name,
+            "dimensionIndex": dim_index,
+        })
+        vid = resp_v.get("value", {}).get("id")
+        value_ids[val_name] = vid
+        print(f"  value '{val_name}': {st_v} id={vid}")
+
+    # Step 3: Post voucher linked to a dimension value (if requested)
+    voucher_data = e.get("voucher", {})
+    acct_number = int(e.get("accountNumber") or voucher_data.get("accountNumber") or e.get("account") or 0)
+    amount = float(e.get("amount") or voucher_data.get("amount") or 0)
+    linked_value = e.get("linkedDimensionValue") or voucher_data.get("linkedDimensionValue") or voucher_data.get("dimensionValue")
+
+    if acct_number and amount and linked_value:
+        acct_id = find_account_id(base_url, token, acct_number)
+        bank_id = find_account_id(base_url, token, 1920)
+        dim_value_id = value_ids.get(linked_value)
+
+        if not dim_value_id:
+            # Try to find by name
+            _, dv_resp = tx_get(base_url, token, "/ledger/accountingDimensionValue",
+                               {"displayName": linked_value, "fields": "id", "count": 1})
+            vals = dv_resp.get("values", [])
+            if vals:
+                dim_value_id = vals[0]["id"]
+
+        dim_field = f"freeAccountingDimension{dim_index}"
+        postings = [
+            {"row": 1, "date": today, "account": {"id": acct_id},
+             "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
+            {"row": 2, "date": today, "account": {"id": bank_id},
+             "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
+        ]
+        if dim_value_id:
+            postings[0][dim_field] = {"id": dim_value_id}
+
+        st_v, resp_v = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+            "date": today,
+            "description": f"Bilag {linked_value}",
+            "postings": postings,
+        })
+        print(f"voucher with dimension: {st_v}")
+
+    return True
+
+
 def handle_delete_entity(base_url, token, e):
     """Generic delete handler for various entity types."""
     entity_type = e.get("entityType", "").lower()
@@ -1494,6 +1537,8 @@ HANDLERS = {
     "reverse_voucher": handle_reverse_voucher,
     "delete_entity": handle_delete_entity,
     "project_invoice": handle_project_invoice,
+    "create_accounting_dimension": handle_create_accounting_dimension,
+    "accounting_dimension": handle_create_accounting_dimension,
     "register_hours_and_invoice": handle_project_invoice,
     "timesheet_and_invoice": handle_project_invoice,
     # Aliases for LLM variations

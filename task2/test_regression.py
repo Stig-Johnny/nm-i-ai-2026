@@ -401,3 +401,52 @@ if __name__ == "__main__":
     print(f"\n{passed}/{passed+failed} passed")
     if failed:
         sys.exit(1)
+
+
+def test_C05_accounting_dimension_nn():
+    """Competition: Accounting dimension Prosjekttype (scored 0/13)"""
+    # This goes through LLM, can't test parsing offline. But we can verify the handler works.
+    from task2.solution import handle_create_accounting_dimension
+    mock = APIMock()
+    entities = {
+        "dimensionName": "Prosjekttype",
+        "dimensionValues": ["Utvikling", "Internt"],
+        "accountNumber": "7000",
+        "amount": 39700,
+        "linkedDimensionValue": "Internt",
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        result = handle_create_accounting_dimension("https://mock/v2", "tok", entities)
+    assert result == True
+    # Should create dimension
+    dim_posts = posts(mock, "/ledger/accountingDimensionName")
+    assert len(dim_posts) == 1
+    assert dim_posts[0][2]["dimensionName"] == "Prosjekttype"
+    # Should create 2 values
+    val_posts = posts(mock, "/ledger/accountingDimensionValue")
+    assert len(val_posts) == 2
+    # Should create voucher
+    vouch_posts = posts(mock, "/ledger/voucher")
+    assert len(vouch_posts) == 1
+    total = sum(p["amountGross"] for p in vouch_posts[0][2]["postings"])
+    assert abs(total) < 0.01
+
+
+def test_C06_accounting_dimension_nested_voucher():
+    """Competition: Accounting dimension with nested voucher object in entities"""
+    from task2.solution import handle_create_accounting_dimension
+    mock = APIMock()
+    entities = {
+        "dimensionName": "Kostsenter",
+        "dimensionValues": ["Markedsføring", "Drift"],
+        "voucher": {"accountNumber": "6340", "amount": 43650, "linkedDimensionValue": "Markedsføring"},
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        result = handle_create_accounting_dimension("https://mock/v2", "tok", entities)
+    assert result == True
+    vouch_posts = posts(mock, "/ledger/voucher")
+    assert len(vouch_posts) == 1, "Should create voucher even when data is nested"
