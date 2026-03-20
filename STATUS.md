@@ -1,6 +1,11 @@
-# Competition Status — Last Updated 2026-03-20 08:20 CET
+# Competition Status — Last Updated 2026-03-20 11:30 CET
 
-## CURRENT POSITION: #58, 56.0 points (~40 hours remaining)
+## ⚠️ REPO IS PRIVATE — MUST MAKE PUBLIC BEFORE SUNDAY 15:00 CET
+```bash
+gh repo edit Stig-Johnny/nm-i-ai-2026 --visibility public --accept-visibility-change-consequences
+```
+
+## NorgesGruppen: 0.8927 mAP — RANK #4 of 136 teams!
 
 ## Our Scores
 
