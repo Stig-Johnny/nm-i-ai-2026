@@ -577,7 +577,7 @@ def handle_create_employee(base_url, token, e):
 
 def handle_create_customer(base_url, token, e):
     body = {"isCustomer": True}
-    name = e.get("name") or e.get("customerName")
+    name = e.get("name") or e.get("customerName") or (f"{e.get('firstName', '')} {e.get('lastName', '')}".strip() or None)
     if name: body["name"] = name
     email = e.get("email") or e.get("customerEmail")
     if email: body["email"] = email
