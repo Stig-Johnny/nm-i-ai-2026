@@ -1,65 +1,60 @@
-# Competition Status — Last Updated 2026-03-19 22:45 CET
+# Competition Status — Last Updated 2026-03-20 08:20 CET
 
-## Leaderboard (19:45 CET)
+## CURRENT POSITION: #58, 56.0 points (~40 hours remaining)
 
-| # | Team | Tripletex | Detection | Astar | Total |
-|---|------|-----------|-----------|-------|-------|
-| 12 | **Dashecorp (us)** | **47.6** | **62.2** | **39.6** | **49.8** |
+## Our Scores
 
-Gap to top 10: ~5 points. Improvement paths: Detection (multi-class), Tripletex (more tasks), Astar (better observations).
+| Task | Score | Notes |
+|------|-------|-------|
+| Tripletex | 44.3 | 8/30 task types, Tier 2 just opened (2× multiplier) |
+| NorgesGruppen | 62.0 | v4 multi-class ONNX submitted, awaiting result |
+| Astar Island | 61.6 | Round 4 scored 57.8, big improvement from priors-only |
+| **Overall** | **56.0 (#58)** | |
 
-NorgesGruppen Detection NOW SCORING — 4 teams have mAP scores. We submit at midnight UTC.
-Astar Island leaderboard still says "hasn't started".
+## Task Ownership
 
-## Active Tasks
+| Task | Owner | Status |
+|------|-------|--------|
+| Tripletex | **Claude-4** (taking over) | Issue #21 has full briefing |
+| Astar Island | **iClaw-E** | Focused 100% on rounds |
+| NorgesGruppen | **Claude-5** | v4 submitted, training improvements |
 
-### Task 1: Grocery Bot (WebSocket)
-- **Owner:** Shared
-- **Scores:** Easy 110, Medium 117, Hard 113, Expert 13
-- **Code:** `warmup/grocery_bot.py`, `warmup/run_game.py`
-- **Token automation:** Chrome CDP on port 9222 → `shared/token.py`
-- **Map UUIDs:** easy=3c7e90e6, medium=0aba093f, hard=9bb9b3de, expert=c6acd676, nightmare=8e5eeedd
+## Active Infrastructure
 
-### Task 2: Tripletex (HTTPS endpoint)
-- **Owner:** iClaw-E
-- **Score:** Rank #1, 0.29 (2/7 checks pass from format alone)
-- **Endpoint:** Cloudflare tunnel (DNS proxy issue — tx-proxy.ainm.no doesn't resolve outside GCP)
-- **Blocker:** Need GCP Cloud Run deploy for full proxy access. @gcplab.me account button inactive. Trying our `invotek-github-infra` GCP project.
-- **LLM approach:** Gemini via Vertex AI in Cloud Run (claude CLI doesn't work in containers)
-- **Sandbox:** `https://kkpqfuj-amager.tripletex.dev/v2` (works from anywhere)
+- **Tripletex server:** Mac Mini port 9001, tunnel `revenue-gale-lou-manor.trycloudflare.com`
+- **Astar poller:** Running on Claude-5 MacBook (`python3 task3/solution.py --poll`)
+- **Mac Mini SSH:** `ssh -i ~/.ssh/mac-executor claude@100.92.170.124`
 
-### Task 3: Astar Island (REST API)
-- **Owner:** Claude-5
-- **Code:** `task3/solution.py`
-- **Round 1:** Submitted all 5 seeds, 100% coverage, 45/50 queries. BUT second poller overwrote with priors-only. Awaiting score.
-- **Round closes:** ~21:42 CET
-- **Poller running:** Background task polls every 30s, skips rounds with existing queries
-- **API:** `https://api.ainm.no/astar-island/`
-- **Auth:** Bearer JWT from Chrome CDP cookie
-- **Terrain classes:** 0=Empty, 1=Settlement, 2=Port, 3=Ruin, 4=Forest, 5=Mountain. Raw grid: 10=Ocean, 11=Plains
+## NorgesGruppen Detection
 
-### Task 4: NorgesGruppen (ZIP upload)
-- **Owner:** Claude-5
-- **Code:** `task4/run.py` (submission), `task4/train_detection.py` (training)
-- **Training:** YOLOv8n single-class detection, epoch 31/80, best mAP50=0.82 (saved)
-- **Submission zip ready:** `norgesgruppen-submission.zip` (11MB) with trained best.pt
-- **Data:** `data/coco/train/` (248 images, 22.7k annotations, 356 categories)
-- **Submission limit:** 0/3 remaining today (burned on network errors). Resets midnight UTC (01:00 CET)
-- **Submit at 01:00 CET:** Package `task4/run.py` + `task4/best_detection.pt` as ZIP, Stig uploads
+- v4 YOLOv8m multi-class (356 categories) trained overnight
+- ONNX export, 100MB, conf=0.001, flat COCO output
+- Submitted — awaiting result
+- Previous score: 62.2 (single-class detection only)
+- Expected improvement from multi-class classification (30% weight)
+- 2 submissions remaining today (resets midnight UTC)
 
-## Infrastructure
+## Tripletex (Issue #21)
 
-- **Chrome CDP:** Port 9222, logged into app.ainm.no (kill all Chrome, relaunch with `--remote-debugging-port=9222` using copied profile dir)
-- **Python venv:** `.venv/` in repo root
-- **MCP docs:** `https://mcp-docs.ainm.no/mcp` (SSE-based, needs session init)
-- **GCP:** `gcloud` installed, project `invotek-github-infra`, only service accounts authed (need `gcloud auth login` for user access)
-- **Discord channels:** #iclaw-e=1482354822492455065, #human=1477261394666590328
+- Claude-4 taking over from iClaw-E
+- Server stays on Mac Mini — Claude-4 pushes code via PR
+- iClaw-E restarts server when PRs merge
+- Tier 2 opened (2× multiplier) — big scoring opportunity
+- 8/30 task types working, many more to implement
 
-## Key Learnings
+## Astar Island
 
-- Astar Island rounds are admin-created on a schedule, not continuous
-- tx-proxy.ainm.no is GCP-internal DNS only
-- NorgesGruppen: 3 submissions/day, resets midnight UTC
-- 356 classes too sparse for 248 images — train single-class detection first (70% of score)
-- Grocery Bot: fleet coordination helps multi-bot but hurts single-bot Easy (126→110 regression)
-- Tripletex: returning correct format gets 2/7 checks free
+- iClaw-E owns this 100%
+- Round 4 scored 57.8 (best so far)
+- Round 5 submitted, awaiting score
+- Crash-safe observation caching working
+- Calibrated priors from Round 1 ground truth
+- Poller auto-detects new rounds
+
+## Key Info for New Sessions
+
+- Read `CLAUDE.md` for coding rules and banned imports
+- Branch protection on main — use PRs
+- `./scripts/check-submission.sh task4/run.py` before any NorgesGruppen zip
+- Banned imports: os, sys, subprocess, pickle, shutil, etc. (full list in CLAUDE.md)
+- Competition deadline: March 22, 15:00 CET
