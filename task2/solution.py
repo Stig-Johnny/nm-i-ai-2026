@@ -1015,6 +1015,8 @@ def handle_register_supplier_invoice(base_url, token, e):
             "date": e.get("invoiceDate") or today,
             "description": e.get("description") or "Leverandorfaktura",
             "account": {"id": expense_acct_id},
+            "amount": round(net_amount, 2),
+            "amountCurrency": round(net_amount, 2),
             "amountGross": round(net_amount, 2),
             "amountGrossCurrency": round(net_amount, 2),
             "vatType": {"id": vat_type_id},
@@ -1024,6 +1026,8 @@ def handle_register_supplier_invoice(base_url, token, e):
             "date": e.get("invoiceDate") or today,
             "description": f"Leverandorgjeld {e.get('supplierName', '')}".strip(),
             "account": {"id": payable_acct_id},
+            "amount": round(-total_incl, 2),
+            "amountCurrency": round(-total_incl, 2),
             "amountGross": round(-total_incl, 2),
             "amountGrossCurrency": round(-total_incl, 2),
             "supplier": {"id": supplier_id} if supplier_id else None,
@@ -1038,15 +1042,13 @@ def handle_register_supplier_invoice(base_url, token, e):
     inv_date = e.get("invoiceDate") or today
     inv_due = e.get("invoiceDueDate") or str(date.today() + timedelta(days=30))
 
-    # Try both approaches: /supplierInvoice AND raw voucher
-    # Competition may check either endpoint
-    inv_date = e.get("invoiceDate") or today
-
-    # Approach 1: /supplierInvoice endpoint
+    # Create supplier invoice with amountCurrency (drives posting amounts)
     si_body = {
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
         "invoiceNumber": e.get("invoiceNumber") or "",
+        "amountCurrency": round(total_incl, 2),
+        "currency": {"id": 1},
         "supplier": {"id": supplier_id} if supplier_id else None,
         "voucher": {
             "date": inv_date,
@@ -1060,16 +1062,20 @@ def handle_register_supplier_invoice(base_url, token, e):
     st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
     print(f"supplierInvoice: {st} {str(resp)[:200]}")
 
-    # Approach 2: ALSO create raw voucher with sendToLedger (covers ledger-based checking)
+    if st in (200, 201):
+        return True
+
+    # Fallback: raw voucher only if supplierInvoice failed
+    print("supplierInvoice failed, trying raw voucher")
     voucher_body = {
         "date": inv_date,
         "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
         "postings": postings,
     }
     st2, resp2 = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", voucher_body)
-    print(f"voucher: {st2}")
+    print(f"voucher fallback: {st2}")
 
-    return st in (200, 201) or st2 in (200, 201)
+    return st2 in (200, 201)
 
 
 def handle_run_payroll(base_url, token, e):
