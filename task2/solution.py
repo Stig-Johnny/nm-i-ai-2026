@@ -785,13 +785,17 @@ def handle_create_invoice(base_url, token, e):
     if not order_lines:
         order_lines = [{"description": "Service", "unitPriceExcludingVatCurrency": 0.0, "count": 1.0}]
 
-    # Create order
+    # Create order — include invoiceComment from line descriptions
+    desc_parts = [l.get("description", "") for l in lines if l.get("description")]
+    invoice_comment = e.get("invoiceComment") or e.get("comment") or (desc_parts[0] if len(desc_parts) == 1 else "")
     order_body = {
         "customer": {"id": customer_id},
         "orderDate": e.get("orderDate") or e.get("invoiceDate") or today,
         "deliveryDate": e.get("dueDate") or due,
         "orderLines": order_lines,
     }
+    if invoice_comment:
+        order_body["invoiceComment"] = invoice_comment
     st_ord, order_resp = tx_post(base_url, token, "/order", order_body)
     order_id = order_resp.get("value", {}).get("id")
     print(f"create_order: {st_ord} id={order_id}")
