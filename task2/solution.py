@@ -745,8 +745,10 @@ def handle_create_invoice(base_url, token, e):
             "unitPriceExcludingVatCurrency": price,
             "count": float(l.get("count") or l.get("quantity") or 1),
         }
-        # Set VAT type per line if specified
+        # Set VAT type per line — default to 25% if not specified
         vat_rate = l.get("vatRate") if l.get("vatRate") is not None else l.get("vatType")
+        if vat_rate is None:
+            vat_rate = 25  # Default Norwegian VAT
         if vat_rate is not None:
             vat_pct = str(vat_rate).replace("%", "").strip().split(".")[0]
             line["vatType"] = {"id": NOK_VAT_OUT.get(vat_pct, 3)}
