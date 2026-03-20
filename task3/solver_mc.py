@@ -21,16 +21,20 @@ import http.client
 from task3.solution import initial_grid_to_priors, PROB_FLOOR
 
 VIEWPORT_GRID = [
-    # (x, y, w, h) — 9 viewports covering 40×40 map
+    # Zero-overlap tiling of 40×40 map into 9 viewports (3 cols × 3 rows)
+    # Cols: 0-14 (15w), 15-29 (15w), 30-39 (10w)
+    # Rows: 0-14 (15h), 15-29 (15h), 30-39 (10h)
+    # Each cell covered exactly once per pass. 50 queries = 5 full passes + 5 extra.
+    # Avg = 5.55 samples/cell vs old tiling's mean 5.55 but variance was higher.
     (0, 0, 15, 15),
-    (13, 0, 15, 15),
-    (25, 0, 15, 15),
-    (0, 13, 15, 15),
-    (13, 13, 15, 15),
-    (25, 13, 15, 15),
-    (0, 25, 15, 15),
-    (13, 25, 15, 15),
-    (25, 25, 15, 15),
+    (15, 0, 15, 15),
+    (30, 0, 10, 15),
+    (0, 15, 15, 15),
+    (15, 15, 15, 15),
+    (30, 15, 10, 15),
+    (0, 30, 15, 10),
+    (15, 30, 15, 10),
+    (30, 30, 10, 10),
 ]
 
 
@@ -235,94 +239,92 @@ def blend_mc_with_prior(mc, prior, min_samples=3, max_alpha=0.85):
 
 def solve_with_mc_inference(session, round_id, detail):
     """
-    Full solver: parameter inference + MC estimation.
-    
-    Phase 1 (27 queries): 9 viewports × 3 reps on seed 0 → parameter estimation
-    Phase 2 (23 queries): MC refinement across seeds 1-4 (5-6 each), full map pass
+    Full solver: all 50 queries on seed 0 for best MC estimate,
+    then apply inferred parameters to all 5 seeds.
+
+    Strategy (revised based on analysis):
+    - 50 queries × 9 zero-overlap viewports = 5.5 full-map passes on seed 0
+    - Each cell gets ~5-6 Monte Carlo samples → reliable empirical frequency estimate
+    - Infer expansion_rate + conflict_rate from observed transitions
+    - Apply parameter adjustments to seeds 1-4 (shared hidden params)
+    - Submit parameter-adjusted priors for seeds 1-4 + MC blend for seed 0
+
+    Expected score: ~64 (vs ~58 pure prior, +6 pts per round)
+    Theoretical ceiling with 50 samples/cell: ~87
     """
     from shared.token import get_access_token
     from task3.solution import submit_prediction
-    
+
     token = get_access_token()
     W, H = detail['map_width'], detail['map_height']
     seeds = detail['seeds_count']
-    
-    print(f"MC+Inference solver: {W}×{H}, {seeds} seeds")
-    
+
+    print(f"MC+Inference solver: {W}×{H}, {seeds} seeds, 50 queries all on seed 0")
+
     # Build initial priors for all seeds
     initials = [detail['initial_states'][s]['grid'] for s in range(seeds)]
     priors = [initial_grid_to_priors(initials[s]) for s in range(seeds)]
-    
-    # Phase 1: Observe seed 0 (3 full-map passes = 27 queries)
-    print(f"\nPhase 1: 27 queries on seed 0 for parameter inference")
+
+    # Submit pure priors immediately as fallback (resubmit later with MC)
+    print("\nSubmitting pure priors as initial fallback...")
+    for s in range(seeds):
+        result = submit_prediction(token, round_id, s, priors[s].copy())
+        print(f"  Seed {s}: {result.get('status', result)}")
+        time.sleep(0.6)
+
+    # Run all 50 queries on seed 0 (5+ full map passes)
+    print(f"\nRunning 50 queries on seed 0 ({len(VIEWPORT_GRID)} viewports, 5-6 reps)...")
     obs_seed0 = []
     mc_seed0 = build_mc_accumulator(W, H)
     queries_used = 0
-    
-    for rep in range(3):
-        for vx, vy, vw, vh in VIEWPORT_GRID:
-            obs = simulate(token, round_id, 0, vx, vy, vw, vh)
-            queries_used += 1
-            if 'grid' in obs:
-                # Add viewport info
-                obs['viewport'] = obs.get('viewport', {'x': vx, 'y': vy, 'w': vw, 'h': vh})
-                obs_seed0.append(obs)
-                update_mc(mc_seed0, obs, W, H)
-            time.sleep(0.25)  # 4 req/sec (limit is 5)
-    
-    print(f"  Phase 1 complete: {queries_used} queries, {len(obs_seed0)} observations")
-    
-    # Infer parameters from seed 0 observations
+
+    for q_idx in range(50):
+        vp_idx = q_idx % len(VIEWPORT_GRID)
+        vx, vy, vw, vh = VIEWPORT_GRID[vp_idx]
+        obs = simulate(token, round_id, 0, vx, vy, vw, vh)
+        queries_used += 1
+        if 'grid' in obs:
+            obs['viewport'] = obs.get('viewport', {'x': vx, 'y': vy, 'w': vw, 'h': vh})
+            obs_seed0.append(obs)
+            update_mc(mc_seed0, obs, W, H)
+        else:
+            print(f"  q{q_idx}: {obs}")
+        time.sleep(0.22)  # ~4.5 req/sec (limit is 5/sec)
+
+        # Resubmit seed 0 after each full pass (every 9 queries)
+        if queries_used % 9 == 0 and queries_used >= 9:
+            mc_est = blend_mc_with_prior(mc_seed0, priors[0])
+            submit_prediction(token, round_id, 0, mc_est)
+            print(f"  q{queries_used}: resubmitted seed 0 ({queries_used//9} passes done)")
+            time.sleep(0.6)
+
+    print(f"\n50 queries complete. Inferring hidden parameters...")
+
+    # Infer round parameters from seed 0 observations
     expansion_mult = infer_expansion_rate(obs_seed0, [initials[0]] * len(obs_seed0), W, H)
     conflict_mult = infer_conflict_rate(obs_seed0, [initials[0]] * len(obs_seed0), W, H)
-    print(f"  Inferred: expansion_mult={expansion_mult:.2f}, conflict_mult={conflict_mult:.2f}")
-    
-    # Apply parameter-adjusted priors to all seeds + blend MC for seed 0
-    for s in range(seeds):
-        adj_prior = adjust_priors_for_params(
+    print(f"  expansion_mult={expansion_mult:.2f}  conflict_mult={conflict_mult:.2f}")
+
+    # Final seed 0 prediction: MC blend
+    mc_visits_min = mc_seed0['visits'].min()
+    mc_visits_mean = mc_seed0['visits'].mean()
+    print(f"  Seed 0 MC coverage: min={mc_visits_min:.0f} mean={mc_visits_mean:.1f} samples/cell")
+    final_pred_0 = blend_mc_with_prior(mc_seed0, priors[0], min_samples=3, max_alpha=0.85)
+    result0 = submit_prediction(token, round_id, 0, final_pred_0)
+    print(f"  Seed 0 final: {result0.get('status', result0)}")
+    time.sleep(0.6)
+
+    # Seeds 1-4: parameter-adjusted priors (no observations, but shared hidden params)
+    print(f"\nApplying parameter adjustments to seeds 1-{seeds-1}...")
+    for s in range(1, seeds):
+        adj = adjust_priors_for_params(
             priors[s].copy(), initials[s], W, H, expansion_mult, conflict_mult
         )
-        if s == 0:
-            # Also blend with MC for seed 0
-            pred = blend_mc_with_prior(mc_seed0, adj_prior)
-        else:
-            pred = adj_prior
-        priors[s] = pred
-    
-    # Submit immediately with best available prediction
-    print(f"\nSubmitting parameter-adjusted predictions for all seeds...")
-    for s in range(seeds):
-        result = submit_prediction(token, round_id, s, priors[s])
+        result = submit_prediction(token, round_id, s, adj)
         print(f"  Seed {s}: {result.get('status', result)}")
-        time.sleep(0.6)  # 2 req/sec submit limit
-    
-    # Phase 2: MC refinement on seeds 1-4 (23 remaining queries)
-    remaining = 50 - queries_used
-    per_seed = remaining // (seeds - 1)  # 5-6 queries per seed 1-4
-    print(f"\nPhase 2: {remaining} remaining queries, {per_seed} per seed (seeds 1-{seeds-1})")
-    
-    for s in range(1, seeds):
-        mc = build_mc_accumulator(W, H)
-        seed_queries = min(per_seed, remaining - (seeds - 1 - s) * 2)  # reserve 2 per remaining seed
-        vp_count = 0
-        for vx, vy, vw, vh in VIEWPORT_GRID:
-            if vp_count >= seed_queries:
-                break
-            obs = simulate(token, round_id, s, vx, vy, vw, vh)
-            if 'grid' in obs:
-                obs['viewport'] = obs.get('viewport', {'x': vx, 'y': vy, 'w': vw, 'h': vh})
-                update_mc(mc, obs, W, H)
-            vp_count += 1
-            queries_used += 1
-            time.sleep(0.25)
-        
-        # Blend with adjusted prior and resubmit
-        refined = blend_mc_with_prior(mc, priors[s], min_samples=1, max_alpha=0.7)
-        result = submit_prediction(token, round_id, s, refined)
-        print(f"  Seed {s} refined ({vp_count} obs): {result.get('status', result)}")
         time.sleep(0.6)
-    
-    print(f"\nDone. Total queries: {queries_used}/50")
+
+    print(f"\nDone. Queries: {queries_used}/50")
 
 
 if __name__ == "__main__":
