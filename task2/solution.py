@@ -942,7 +942,7 @@ def handle_register_payment(base_url, token, e):
 
     invoice = invoices[0]
     inv_id = invoice["id"]
-    amount = e.get("amount") or e.get("paidAmount") or invoice.get("amountCurrency", 0)
+    amount = e.get("amount") or e.get("paidAmount") or e.get("netAmount") or e.get("totalAmount") or invoice.get("amountCurrency", 0)
 
     st, resp = tx_put(base_url, token, f"/invoice/{inv_id}/:payment", params={
         "paymentDate": e.get("date") or e.get("paymentDate") or today,
