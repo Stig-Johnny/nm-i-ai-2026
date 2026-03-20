@@ -344,21 +344,29 @@ def parse_with_claude(prompt, file_texts):
     import time as _time
     start = _time.time()
 
-    # Try deterministic regex parse first (instant, no LLM needed)
-    regex_result = regex_parse(prompt)
-    if regex_result:
-        task_type = regex_result.get("task_type", "unknown")
-        if task_type != "unknown":
-            # Validate: if entities have too many None/empty values, fall through to LLM
-            entities = regex_result.get("entities", {})
-            filled = sum(1 for v in entities.values() if v is not None and v != "" and v != [] and v != {})
-            total = len(entities)
-            if filled >= max(1, total * 0.3):  # At least 30% of fields filled
-                print(f"REGEX PARSE: {task_type} ({filled}/{total} fields) (0ms)")
-                _log_request(prompt, file_texts, regex_result, True, _time.time() - start)
-                return regex_result
-            else:
-                print(f"REGEX WEAK: {task_type} only {filled}/{total} fields — falling through to LLM")
+    # Complexity check: long prompts or multi-action prompts go straight to LLM
+    import re as _re
+    # Strip emails before counting action words (avoids "faktura@..." false positive)
+    prompt_no_email = _re.sub(r'[\w.+-]+@[\w.-]+', '', prompt.lower())
+    action_words = len(_re.findall(r'\b(?:opprett|create|registrer|registe|slett|delete|send|generer|generate|gere|faktura|fatura|invoice|rechnung|factura|betaling|payment|oppdater|update|reverser|reverse|kjør|run|konverter|convert|créez|erstellen|crea|envoyez|senden)\b', prompt_no_email))
+    is_complex = len(prompt) > 200 or action_words >= 2 or bool(file_texts)
+
+    if not is_complex:
+        regex_result = regex_parse(prompt)
+        if regex_result:
+            task_type = regex_result.get("task_type", "unknown")
+            if task_type != "unknown":
+                entities = regex_result.get("entities", {})
+                filled = sum(1 for v in entities.values() if v is not None and v != "" and v != [] and v != {})
+                total = len(entities)
+                if filled >= max(1, total * 0.4):
+                    print(f"REGEX PARSE: {task_type} ({filled}/{total} fields) (0ms)")
+                    _log_request(prompt, file_texts, regex_result, True, _time.time() - start)
+                    return regex_result
+                else:
+                    print(f"REGEX WEAK: {task_type} only {filled}/{total} fields — falling through to LLM")
+    else:
+        print(f"COMPLEX PROMPT ({len(prompt)} chars, {action_words} actions) — using LLM")
 
     full_prompt = prompt
     if file_texts:
