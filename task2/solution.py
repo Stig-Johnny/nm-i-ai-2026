@@ -135,12 +135,13 @@ def regex_parse(prompt):
 
     def find_name_after(t, *keywords):
         for kw in keywords:
-            m = re.search(rf'{kw}\s+([A-ZÆØÅÄÖÜ][\w\-]+(?:\s+[A-ZÆØÅÄÖÜ][\w\-]+)*(?:\s+(?:AS|A/S|ASA|GmbH|Ltd|SL|SARL|SA|AB|AG|ApS|OY))?)', t)
+            # Allow up to 5 lowercase words between keyword and capitalized name
+            m = re.search(rf'{kw}(?:\s+[a-zæøåäöü]+){{0,5}}\s+([A-ZÆØÅÄÖÜ][\w\-]+(?:\s+[A-ZÆØÅÄÖÜ][\w\-]+)*(?:\s+(?:AS|A/S|ASA|GmbH|Ltd|SL|SARL|SA|AB|AG|ApS|OY|Lda|Ltda))?)', t)
             if m: return m.group(1).strip()
         return None
 
     def find_address(t):
-        m = re.search(r'(?:adress[ea]|address|Adresse)\s+(?:er|is|ist|:)?\s*(.+?)(?:\.|$)', t, re.I)
+        m = re.search(r'(?:adress[ea]|address|Adresse)\s+(?:ist|er|is|es|:)?\s+(.+?)(?:\.|$)', t, re.I)
         if not m: return None
         addr_str = m.group(1)
         # Try "Street, PostalCode City" pattern
