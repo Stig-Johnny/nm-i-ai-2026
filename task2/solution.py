@@ -757,7 +757,7 @@ def handle_create_travel_expense(base_url, token, e):
     today = str(date.today())
 
     # Find or create employee
-    emp_name = e.get("employeeName")
+    emp_name = e.get("employeeName") or (f"{e.get('firstName', '')} {e.get('lastName', '')}".strip() or None)
     emp_email = e.get("employeeEmail")
     emp_id = e.get("employeeId") or get_or_create_employee(base_url, token, name=emp_name, email=emp_email)
     if not emp_id:
@@ -968,7 +968,7 @@ def handle_run_payroll(base_url, token, e):
     current_year = date.today().year
 
     # Find or create employee
-    emp_name = e.get("employeeName")
+    emp_name = e.get("employeeName") or (f"{e.get('firstName', '')} {e.get('lastName', '')}".strip() or None)
     emp_email = e.get("employeeEmail")
     emp_id = get_or_create_employee(base_url, token, name=emp_name, email=emp_email)
     if not emp_id:
@@ -1304,7 +1304,7 @@ def handle_project_invoice(base_url, token, e):
     customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
 
     # Step 2: Create employee (the person who worked the hours)
-    emp_name = e.get("employeeName")
+    emp_name = e.get("employeeName") or (f"{e.get('firstName', '')} {e.get('lastName', '')}".strip() or None)
     emp_email = e.get("employeeEmail")
     emp_id = get_or_create_employee(base_url, token, name=emp_name, email=emp_email)
 
