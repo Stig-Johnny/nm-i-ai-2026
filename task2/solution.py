@@ -1712,91 +1712,40 @@ HANDLERS = {
 }
 
 def normalize_entities(entities):
-    """Normalize LLM entity keys to canonical names. Prevents key alias whack-a-mole."""
-    KEY_MAP = {
-        # Name variants — only normalize standalone name keys, not prefixed ones
-        "productName": "name",
-        # supplierName, customerName, projectName: keep as-is (different semantic meaning)
+    """Add missing canonical keys from known aliases. NEVER rename — only copy."""
+    e = dict(entities)  # Don't mutate original
 
-        # Organization number — normalize to canonical
-        "supplierOrgNumber": "organizationNumber",
-        "customerOrgNumber": "organizationNumber",
-        "orgNumber": "organizationNumber",
-        "customerOrganizationNumber": "organizationNumber",
+    # Email: ensure both 'email' and 'employeeEmail' exist
+    if "email" not in e:
+        e["email"] = e.get("employeeEmail") or e.get("supplierEmail") or e.get("customerEmail")
+    if "employeeEmail" not in e:
+        e["employeeEmail"] = e.get("email")
 
-        # Email — keep originals AND add canonical
-        # Don't rename — handlers check both "email" and "employeeEmail"
+    # Name: ensure 'name' exists from variants
+    if "name" not in e:
+        e["name"] = e.get("productName") or e.get("supplierName") or e.get("customerName") or e.get("projectName")
 
-        # Phone
-        "customerPhone": "phoneNumber",
-        "phone": "phoneNumber",
+    # Org number: ensure 'organizationNumber' exists
+    if "organizationNumber" not in e:
+        e["organizationNumber"] = e.get("supplierOrgNumber") or e.get("customerOrgNumber") or e.get("orgNumber") or e.get("customerOrganizationNumber")
 
-        # Price
-        "netPrice": "priceExcludingVat",
-        "unitPrice": "priceExcludingVat",
-        "priceExcVat": "priceExcludingVat",
-        "priceIncVat": "priceIncludingVat",
-        "priceWithVat": "priceIncludingVat",
-
-        # Product number
-        "productNumber": "number",
-        "productCode": "number",
-
-        # Project
-        "projectManagerName": "projectManagerName",  # keep
-        "projectManager": "projectManagerName",  # string → name
-        "projectLeaderName": "projectManagerName",
-        "projectLeader": "projectManagerName",
-        "projectManagerEmail": "projectManagerEmail",  # keep
-        "projectLeaderEmail": "projectManagerEmail",
-
-        # PM first/last
-        "projectManagerFirstName": "firstName",
-        "projectLeaderFirstName": "firstName",
-        "projectManagerLastName": "lastName",
-        "projectLeaderLastName": "lastName",
-
-        # Employee
-        "employeeFirstName": "firstName",
-        "employeeLastName": "lastName",
-
-        # Amounts
-        "netAmount": "netAmount",  # keep
-        "totalAmountInclVat": "totalAmountInclVat",  # keep
-        "totalAmountIncVat": "totalAmountInclVat",
-        "paidAmount": "paidAmount",  # keep
-        "totalAmount": "totalAmount",  # keep
-
-        # Hours
-        "hoursWorked": "hours",
-
-        # Account
-        "account": "accountNumber",
-    }
-
-    normalized = {}
-    for key, value in entities.items():
-        canonical = KEY_MAP.get(key, key)
-        # Don't overwrite if canonical already set with a value
-        if canonical in normalized and normalized[canonical]:
-            continue
-        normalized[canonical] = value
-
-    # Ensure email is available under both keys
-    if "email" not in normalized:
-        normalized["email"] = normalized.get("employeeEmail") or normalized.get("supplierEmail") or normalized.get("customerEmail")
-    if "employeeEmail" not in normalized and "email" in normalized:
-        normalized["employeeEmail"] = normalized["email"]
-
-    # Also construct employeeName from firstName+lastName if missing
-    if "employeeName" not in normalized and ("firstName" in normalized or "lastName" in normalized):
-        first = normalized.get("firstName", "")
-        last = normalized.get("lastName", "")
+    # Employee name: construct from firstName+lastName
+    if "employeeName" not in e:
+        first = e.get("firstName") or e.get("projectManagerFirstName") or e.get("projectLeaderFirstName") or e.get("employeeFirstName") or ""
+        last = e.get("lastName") or e.get("projectManagerLastName") or e.get("projectLeaderLastName") or e.get("employeeLastName") or ""
         full = f"{first} {last}".strip()
         if full:
-            normalized["employeeName"] = full
+            e["employeeName"] = full
 
-    return normalized
+    # Hours
+    if "hours" not in e:
+        e["hours"] = e.get("hoursWorked") or e.get("count")
+
+    # Price
+    if "priceExcludingVat" not in e:
+        e["priceExcludingVat"] = e.get("netPrice") or e.get("unitPrice") or e.get("priceExcVat") or e.get("price")
+
+    return e
 
 
 def execute_plan(base_url, token, plan, prompt):
