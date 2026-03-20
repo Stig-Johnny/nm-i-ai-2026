@@ -942,7 +942,16 @@ def handle_register_payment(base_url, token, e):
 
     invoice = invoices[0]
     inv_id = invoice["id"]
-    amount = e.get("amount") or e.get("paidAmount") or e.get("netAmount") or e.get("totalAmount") or invoice.get("amountCurrency", 0)
+        # Payment should be the TOTAL amount (including VAT), not the net amount
+    amount = e.get("paidAmount") or e.get("totalAmountInclVat") or e.get("totalAmount") or e.get("amount")
+    if not amount:
+        # If only netAmount given, calculate total with VAT
+        net = float(e.get("netAmount") or 0)
+        vat_rate = float(e.get("vatRate") or 25)
+        if net:
+            amount = net * (1 + vat_rate / 100)
+    if not amount:
+        amount = invoice.get("amountCurrency", 0)
 
     st, resp = tx_put(base_url, token, f"/invoice/{inv_id}/:payment", params={
         "paymentDate": e.get("date") or e.get("paymentDate") or today,
