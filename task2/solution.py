@@ -637,7 +637,11 @@ def handle_create_product(base_url, token, e):
 
     price = e.get("priceExcludingVat") or e.get("priceExcVat") or e.get("price") or e.get("netPrice") or e.get("unitPrice")
     if price is not None:
-        body["priceExcludingVatCurrency"] = float(price)
+        price_f = float(price)
+        body["priceExcludingVatCurrency"] = price_f
+        # Also set priceIncludingVat (calculated from VAT rate)
+        vat_pct_val = float(str(e.get("vatRate") or e.get("vatType") or "25").replace("%", "").strip().split(".")[0])
+        body["priceIncludingVatCurrency"] = round(price_f * (1 + vat_pct_val / 100), 2)
     if e.get("priceIncludingVat") or e.get("priceIncVat") or e.get("priceWithVat"):
         body["priceIncludingVatCurrency"] = float(e.get("priceIncludingVat") or e.get("priceIncVat") or e.get("priceWithVat"))
 
