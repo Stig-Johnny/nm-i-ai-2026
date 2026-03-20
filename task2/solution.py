@@ -62,7 +62,7 @@ SYSTEM_PROMPT = """You are an expert accounting AI that parses task prompts into
 Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk, German, French), extract:
 
 {
-  "task_type": "one of: create_employee, create_customer, create_supplier, create_product, create_department, create_project, create_invoice, create_travel_expense, delete_travel_expense, register_payment, register_supplier_invoice, run_payroll, create_credit_note, update_employee, update_customer, create_contact, create_order, reverse_voucher, bank_reconciliation, unknown",
+  "task_type": "one of: create_employee, create_customer, create_supplier, create_product, create_department, create_project, create_invoice, create_travel_expense, delete_travel_expense, register_payment, register_supplier_invoice, run_payroll, create_credit_note, update_employee, update_customer, create_contact, create_order, invoice_with_payment, reverse_voucher, delete_entity, bank_reconciliation, unknown",
   "entities": {
     // ALL relevant data extracted from the prompt
     // Names: firstName, lastName (split properly)
@@ -1112,6 +1112,231 @@ def handle_create_contact(base_url, token, e):
 # Task dispatcher
 # ============================================================
 
+def handle_update_employee(base_url, token, e):
+    """Update an existing employee's fields."""
+    emp_id = None
+    email = e.get("email") or e.get("employeeEmail")
+    name = e.get("employeeName") or e.get("name")
+
+    # Find the employee
+    if email:
+        st, resp = tx_get(base_url, token, "/employee", {"email": email, "fields": "id,version,firstName,lastName,email,phoneNumberMobile", "count": 1})
+        vals = resp.get("values", [])
+        if vals: emp_id = vals[0]["id"]
+    if not emp_id and name:
+        parts = name.split()
+        st, resp = tx_get(base_url, token, "/employee", {"firstName": parts[0], "fields": "id,version,firstName,lastName,email,phoneNumberMobile", "count": 5})
+        vals = resp.get("values", [])
+        if vals: emp_id = vals[0]["id"]
+    if not emp_id:
+        st, resp = tx_get(base_url, token, "/employee", {"fields": "id,version", "count": 1})
+        vals = resp.get("values", [])
+        if vals: emp_id = vals[0]["id"]
+    if not emp_id:
+        print("No employee found to update")
+        return False
+
+    # Get current employee data
+    st, current = tx_get(base_url, token, f"/employee/{emp_id}", {"fields": "*"})
+    if st != 200:
+        return False
+    emp = current.get("value", {})
+
+    # Update fields
+    body = {"id": emp_id, "version": emp.get("version", 0)}
+    if e.get("firstName"): body["firstName"] = e["firstName"]
+    if e.get("lastName"): body["lastName"] = e["lastName"]
+    if e.get("newEmail") or e.get("email"): body["email"] = e.get("newEmail") or e["email"]
+    if e.get("phone") or e.get("phoneNumberMobile"):
+        body["phoneNumberMobile"] = e.get("phone") or e["phoneNumberMobile"]
+    if e.get("address"):
+        addr = e["address"]
+        body["address"] = {
+            "addressLine1": addr.get("street") or addr.get("addressLine1", ""),
+            "postalCode": addr.get("postalCode", ""),
+            "city": addr.get("city", ""),
+            "country": {"id": 161},
+        }
+
+    st, resp = tx_put(base_url, token, f"/employee/{emp_id}", body)
+    print(f"update_employee: {st} {str(resp)[:200]}")
+    return st in (200, 201)
+
+
+def handle_update_customer(base_url, token, e):
+    """Update an existing customer's fields."""
+    cust_id = None
+    org = e.get("organizationNumber") or e.get("orgNumber")
+    name = e.get("customerName") or e.get("name")
+
+    if org:
+        st, resp = tx_get(base_url, token, "/customer", {"organizationNumber": org, "fields": "id,version", "count": 1})
+        vals = resp.get("values", [])
+        if vals: cust_id = vals[0]["id"]
+    if not cust_id and name:
+        st, resp = tx_get(base_url, token, "/customer", {"customerName": name, "fields": "id,version", "count": 1})
+        vals = resp.get("values", [])
+        if vals: cust_id = vals[0]["id"]
+    if not cust_id:
+        print("No customer found to update")
+        return False
+
+    st, current = tx_get(base_url, token, f"/customer/{cust_id}", {"fields": "*"})
+    if st != 200:
+        return False
+    cust = current.get("value", {})
+
+    body = {"id": cust_id, "version": cust.get("version", 0)}
+    if e.get("newName"): body["name"] = e["newName"]
+    if e.get("newEmail") or e.get("email"): body["email"] = e.get("newEmail") or e["email"]
+    if e.get("phone") or e.get("phoneNumber"): body["phoneNumber"] = e.get("phone") or e["phoneNumber"]
+    if e.get("address"):
+        addr = e["address"]
+        addr_obj = {
+            "addressLine1": addr.get("street") or addr.get("addressLine1", ""),
+            "postalCode": addr.get("postalCode", ""),
+            "city": addr.get("city", ""),
+            "country": {"id": 161},
+        }
+        body["physicalAddress"] = addr_obj
+        body["postalAddress"] = addr_obj
+
+    st, resp = tx_put(base_url, token, f"/customer/{cust_id}", body)
+    print(f"update_customer: {st} {str(resp)[:200]}")
+    return st in (200, 201)
+
+
+def handle_create_order(base_url, token, e):
+    """Create an order (without converting to invoice)."""
+    today = str(date.today())
+    due = str(date.today() + timedelta(days=30))
+
+    cust_name = e.get("customerName")
+    cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
+    customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
+    if not customer_id:
+        return False
+
+    lines = e.get("lines") or e.get("orderLines") or []
+    if not lines and e.get("description"):
+        lines = [{"description": e["description"], "unitPrice": e.get("amount", 0), "count": 1}]
+
+    order_lines = []
+    for l in lines:
+        price = float(l.get("unitPrice") or l.get("unitPriceExcludingVatCurrency") or l.get("amount") or 0)
+        order_lines.append({
+            "description": l.get("description", "Service"),
+            "unitPriceExcludingVatCurrency": price,
+            "count": float(l.get("count") or l.get("quantity") or 1),
+        })
+    if not order_lines:
+        order_lines = [{"description": "Service", "unitPriceExcludingVatCurrency": 0.0, "count": 1.0}]
+
+    body = {
+        "customer": {"id": customer_id},
+        "orderDate": e.get("orderDate") or today,
+        "deliveryDate": e.get("deliveryDate") or e.get("dueDate") or due,
+        "orderLines": order_lines,
+    }
+    st, resp = tx_post(base_url, token, "/order", body)
+    print(f"create_order: {st} {str(resp)[:200]}")
+    return st in (200, 201)
+
+
+def handle_invoice_with_payment(base_url, token, e):
+    """Create invoice AND register payment — Tier 2 multi-step."""
+    # Step 1: Create the invoice
+    ok = handle_create_invoice(base_url, token, e)
+    if not ok:
+        return False
+
+    # Step 2: Find the invoice we just created and pay it
+    _, inv_resp = tx_get(base_url, token, "/invoice", {
+        "invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-12-31",
+        "count": 1, "sorting": "-invoiceNumber"
+    })
+    invoices = inv_resp.get("values", [])
+    if not invoices:
+        print("No invoice found for payment")
+        return True  # Invoice was created at least
+
+    inv_id = invoices[0]["id"]
+    amount = e.get("paymentAmount") or e.get("amount")
+    if not amount:
+        # Get invoice amount
+        _, inv_detail = tx_get(base_url, token, f"/invoice/{inv_id}", {"fields": "id,amountCurrency"})
+        amount = inv_detail.get("value", {}).get("amountCurrency", 0)
+
+    _, pt_resp = tx_get(base_url, token, "/invoice/paymentType", {"count": 1, "fields": "id"})
+    pt_id = pt_resp.get("values", [{}])[0].get("id", 0)
+
+    st, resp = tx_put(base_url, token, f"/invoice/{inv_id}/:payment", params={
+        "paymentDate": e.get("paymentDate") or str(date.today()),
+        "paymentTypeId": pt_id,
+        "paidAmount": float(amount),
+    })
+    print(f"invoice payment: {st} {str(resp)[:200]}")
+    return True
+
+
+def handle_reverse_voucher(base_url, token, e):
+    """Reverse a voucher — Tier 2/3."""
+    today = str(date.today())
+
+    # Find voucher to reverse
+    _, v_resp = tx_get(base_url, token, "/ledger/voucher", {
+        "dateFrom": "2020-01-01", "dateTo": "2030-12-31", "count": 10
+    })
+    vouchers = v_resp.get("values", [])
+    if not vouchers:
+        print("No vouchers to reverse")
+        return False
+
+    v_id = e.get("voucherId") or vouchers[0]["id"]
+    st, resp = tx_put(base_url, token, f"/ledger/voucher/{v_id}/:reverse", params={
+        "date": e.get("date") or today,
+    })
+    print(f"reverse_voucher: {st} {str(resp)[:200]}")
+    return st in (200, 201)
+
+
+def handle_delete_entity(base_url, token, e):
+    """Generic delete handler for various entity types."""
+    entity_type = e.get("entityType", "").lower()
+    entity_name = e.get("name") or e.get("entityName")
+
+    endpoints = {
+        "customer": "/customer",
+        "supplier": "/supplier",
+        "product": "/product",
+        "project": "/project",
+        "department": "/department",
+        "employee": "/employee",
+        "invoice": "/invoice",
+        "order": "/order",
+    }
+
+    path = endpoints.get(entity_type)
+    if not path:
+        print(f"Unknown entity type to delete: {entity_type}")
+        return False
+
+    # Find entity
+    params = {"count": 10, "fields": "id,name"}
+    if entity_name:
+        params["name"] = entity_name
+    st, resp = tx_get(base_url, token, path, params)
+    vals = resp.get("values", [])
+    if not vals:
+        print(f"No {entity_type} found to delete")
+        return False
+
+    eid = vals[0]["id"]
+    st, resp = tx_delete(base_url, token, f"{path}/{eid}")
+    print(f"delete {entity_type} {eid}: {st}")
+    return st in (200, 204)
+
+
 HANDLERS = {
     "create_employee": handle_create_employee,
     "create_customer": handle_create_customer,
@@ -1127,6 +1352,23 @@ HANDLERS = {
     "run_payroll": handle_run_payroll,
     "create_credit_note": handle_create_credit_note,
     "create_contact": handle_create_contact,
+    "update_employee": handle_update_employee,
+    "update_customer": handle_update_customer,
+    "create_order": handle_create_order,
+    "invoice_with_payment": handle_invoice_with_payment,
+    "reverse_voucher": handle_reverse_voucher,
+    "delete_entity": handle_delete_entity,
+    # Aliases for LLM variations
+    "create_and_send_invoice": handle_create_invoice,
+    "send_invoice": handle_create_invoice,
+    "pay_invoice": handle_register_payment,
+    "register_incoming_invoice": handle_register_supplier_invoice,
+    "create_supplier_invoice": handle_register_supplier_invoice,
+    "delete_customer": handle_delete_entity,
+    "delete_supplier": handle_delete_entity,
+    "delete_product": handle_delete_entity,
+    "delete_project": handle_delete_entity,
+    "delete_invoice": handle_delete_entity,
 }
 
 def execute_plan(base_url, token, plan, prompt):
