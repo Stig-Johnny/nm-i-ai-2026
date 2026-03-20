@@ -163,9 +163,8 @@ def regex_parse(prompt):
         expenses = []
         for m in re.finditer(r'([\wæøåäöü]+(?:\s+[\wæøåäöü]+)?)\s+(\d[\d\s]*)\s*kr', p, re.I):
             desc = m.group(1).strip()
-            # Strip conjunctions from start
-        desc = re.sub(r'^(?:og|and|und|et|y|e)\s+', '', desc, flags=re.I)
-        if desc.lower() not in ('på', 'er', 'med', 'og', 'av', 'for', 'dagsats', 'dager'):
+            desc = re.sub(r'^(?:og|and|und|et|y|e)\s+', '', desc, flags=re.I)
+            if desc.lower() not in ('på', 'er', 'med', 'og', 'av', 'for', 'dagsats', 'dager'):
                 expenses.append({"description": desc, "amount": float(m.group(2).replace(' ', ''))})
         diet = {}
         diet_match = re.search(r'diett\s*\(dagsats\s+(\d+)\s*kr\)', p, re.I)
