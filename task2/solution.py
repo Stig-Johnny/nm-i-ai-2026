@@ -1724,10 +1724,8 @@ def normalize_entities(entities):
         "orgNumber": "organizationNumber",
         "customerOrganizationNumber": "organizationNumber",
 
-        # Email — normalize to canonical
-        "employeeEmail": "email",
-        "supplierEmail": "email",
-        "customerEmail": "email",
+        # Email — keep originals AND add canonical
+        # Don't rename — handlers check both "email" and "employeeEmail"
 
         # Phone
         "customerPhone": "phoneNumber",
@@ -1783,6 +1781,12 @@ def normalize_entities(entities):
         if canonical in normalized and normalized[canonical]:
             continue
         normalized[canonical] = value
+
+    # Ensure email is available under both keys
+    if "email" not in normalized:
+        normalized["email"] = normalized.get("employeeEmail") or normalized.get("supplierEmail") or normalized.get("customerEmail")
+    if "employeeEmail" not in normalized and "email" in normalized:
+        normalized["employeeEmail"] = normalized["email"]
 
     # Also construct employeeName from firstName+lastName if missing
     if "employeeName" not in normalized and ("firstName" in normalized or "lastName" in normalized):
