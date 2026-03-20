@@ -63,7 +63,7 @@ Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk
 
 {
   "task_type": "one of: create_employee, create_customer, create_supplier, create_product, create_department, create_project, create_invoice, create_travel_expense, delete_travel_expense, register_payment, register_supplier_invoice, run_payroll, create_credit_note, update_employee, update_customer, create_contact, create_order, invoice_with_payment, project_invoice, reverse_voucher, delete_entity, bank_reconciliation, unknown",
-  // Use 'project_invoice' when the task involves registering hours on a project AND generating an invoice based on those hours
+  // Use 'project_invoice' when the task involves: registering hours on a project, setting fixed price on a project, or generating an invoice linked to a project. If the prompt mentions a project name AND an invoice, use project_invoice.
   // Use 'create_accounting_dimension' when creating free accounting dimensions with values and/or posting vouchers linked to dimension values
   "entities": {
     // ALL relevant data extracted from the prompt
@@ -703,6 +703,11 @@ def handle_create_project(base_url, token, e):
 def handle_create_invoice(base_url, token, e):
     today = str(date.today())
     due = str(date.today() + timedelta(days=30))
+
+    # If this involves a project, delegate to project_invoice handler
+    if e.get("projectName") or e.get("project"):
+        print("Invoice has project — delegating to project_invoice")
+        return handle_project_invoice(base_url, token, e)
 
     ensure_bank_account(base_url, token)
 
@@ -1406,10 +1411,23 @@ def handle_project_invoice(base_url, token, e):
         st_hr, hr_resp = tx_post(base_url, token, "/employee/hourlyCostAndRate", hr_body)
         print(f"hourly rate: {st_hr} {str(hr_resp)[:150]}")
 
-    # Step 7: Create invoice based on hours
+    # Step 7: Create invoice
     ensure_bank_account(base_url, token)
-    total_amount = hours * hourly_rate if hours and hourly_rate else float(e.get("totalAmount", 0))
-    desc = f"{activity_name} - {proj_name}" if activity_name else proj_name
+
+    # Handle fixed price projects
+    fixed_price = float(e.get("fixedPrice") or 0)
+    invoice_pct = float(e.get("invoicePercentage") or 100)
+    invoice_amount = float(e.get("invoiceAmount") or 0)
+
+    if fixed_price:
+        total_amount = invoice_amount or (fixed_price * invoice_pct / 100)
+        desc = f"{proj_name} - delbetaling ({int(invoice_pct)}%)" if invoice_pct < 100 else proj_name
+    elif hours and hourly_rate:
+        total_amount = hours * hourly_rate
+        desc = f"{activity_name} - {proj_name}" if activity_name else proj_name
+    else:
+        total_amount = float(e.get("totalAmount", 0))
+        desc = proj_name
 
     order_lines = [{
         "description": desc,

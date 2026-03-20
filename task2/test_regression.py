@@ -481,3 +481,38 @@ def test_C07_invoice_multi_vat_de():
     assert 3 in vat_ids, f"Missing 25% VAT (id=3): {vat_ids}"
     assert 31 in vat_ids, f"Missing 15% VAT (id=31): {vat_ids}"
     assert 6 in vat_ids, f"Missing 0% VAT (id=6): {vat_ids}"
+
+
+def test_C08_project_fixed_price_invoice():
+    """Competition 14:05: Fixed price project 75% partial invoice (scored 6/8).
+    LLM returned create_invoice but should delegate to project_invoice."""
+    from task2.solution import handle_create_invoice
+    mock = APIMock()
+    entities = {
+        "customerName": "Stormberg AS",
+        "customerOrgNumber": "834028719",
+        "projectName": "Digital transformasjon",
+        "projectLeaderFirstName": "Hilde",
+        "projectLeaderLastName": "Hansen",
+        "projectLeaderEmail": "hilde.hansen@example.org",
+        "fixedPrice": 203000,
+        "invoicePercentage": 75,
+        "lines": [{"description": "Digital transformasjon - delbetaling (75%)", "unitPrice": 152250, "count": 1}],
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        result = handle_create_invoice("https://mock/v2", "tok", entities)
+    assert result == True
+    # Should have delegated to project_invoice — check project was created
+    proj_posts = posts(mock, "/project")
+    assert len(proj_posts) >= 1, "Project should be created"
+    assert proj_posts[0][2]["name"] == "Digital transformasjon"
+    # Invoice should exist
+    ord_posts = posts(mock, "/order")
+    assert len(ord_posts) >= 1, "Order should be created for invoice"
+    # Invoice amount should be 75% of 203000 = 152250
+    order_lines = ord_posts[0][2].get("orderLines", [])
+    assert len(order_lines) >= 1
+    amount = order_lines[0].get("unitPriceExcludingVatCurrency", 0) * order_lines[0].get("count", 1)
+    assert abs(amount - 152250) < 1, f"Invoice amount should be 152250, got {amount}"
