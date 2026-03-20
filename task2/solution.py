@@ -55,8 +55,8 @@ def tx_post(base_url, token, path, body):
     r = requests.post(f"{base_url}{path}", auth=("0", token), json=body, timeout=30)
     return r.status_code, r.json() if r.content else {}
 
-def tx_put(base_url, token, path, body):
-    r = requests.put(f"{base_url}{path}", auth=("0", token), json=body, timeout=30)
+def tx_put(base_url, token, path, body, params=None):
+    r = requests.put(f"{base_url}{path}", auth=("0", token), json=body, params=params or {}, timeout=30)
     return r.status_code, r.json() if r.content else {}
 
 def tx_delete(base_url, token, path):
@@ -185,16 +185,41 @@ def execute_plan(base_url, token, plan, prompt):
         return generic_handler(base_url, token, plan, prompt)
 
 
+def get_default_department(base_url, token):
+    """Every employee requires a department. Fetch the first available one."""
+    st, resp = tx_get(base_url, token, "/department", {"fields": "id,name"})
+    if st in (200, 201):
+        vals = resp.get("values", [])
+        if vals:
+            return vals[0]["id"]
+    return None
+
+
 def create_employee(base_url, token, e):
-    # Build body with only fields we know Tripletex accepts on POST /employee
-    body = {}
+    # POST /employee — requires department (sandbox always has at least one)
+    dept_id = get_default_department(base_url, token)
+
+    body = {
+        "userType": "STANDARD",  # EXTENDED or STANDARD; EXTENDED for admin
+    }
     if "firstName" in e: body["firstName"] = e["firstName"]
     if "lastName" in e: body["lastName"] = e["lastName"]
     if "email" in e: body["email"] = e["email"]
     if e.get("dateOfBirth"): body["dateOfBirth"] = e["dateOfBirth"]
-    if e.get("phoneNumber") or e.get("phone"):
-        body["phoneNumberMobile"] = e.get("phoneNumber") or e.get("phone")
-    # NOTE: do NOT send userType/administrator in body — use entitlements API instead
+    if dept_id:
+        body["department"] = {"id": dept_id}
+    if e.get("administrator"):
+        body["userType"] = "EXTENDED"
+
+    # Address
+    addr = e.get("address") or e.get("physicalAddress") or {}
+    if addr:
+        body["address"] = {
+            "addressLine1": addr.get("street") or addr.get("addressLine1", ""),
+            "postalCode": addr.get("postalCode", ""),
+            "city": addr.get("city", ""),
+            "country": {"id": 161},
+        }
 
     status, resp = tx_post(base_url, token, "/employee", body)
     vm = resp.get("validationMessages", []) if isinstance(resp, dict) else []
@@ -203,8 +228,8 @@ def create_employee(base_url, token, e):
     if status in (200, 201):
         emp_id = resp.get("value", {}).get("id")
 
-        # Grant ALL_PRIVILEGES (administrator) via entitlements API
-        if emp_id and e.get("administrator"):
+        # Grant ALL_PRIVILEGES via entitlements API (required for admin/project manager use)
+        if emp_id:
             r = requests.put(
                 f"{base_url}/employee/entitlement/:grantEntitlementsByTemplate",
                 auth=("0", token),
@@ -213,13 +238,21 @@ def create_employee(base_url, token, e):
             )
             print(f"grantEntitlements ALL_PRIVILEGES: {r.status_code}")
 
+        # Phone via separate endpoint (phoneNumberMobile in body doesn't always work)
+        phone = e.get("phoneNumber") or e.get("phone") or e.get("phoneNumberMobile")
+        if emp_id and phone:
+            _, pr = tx_post(base_url, token, f"/employee/{emp_id}/phoneNumber", {
+                "phoneNumberType": "MOBILE",
+                "number": phone,
+            })
+            print(f"add phone: {_} {str(pr)[:100]}")
+
         # Add employment if startDate provided
         if emp_id and e.get("startDate"):
-            emp_body = {
+            _, emp_resp = tx_post(base_url, token, "/employee/employment", {
                 "employee": {"id": emp_id},
                 "startDate": e["startDate"],
-            }
-            _, emp_resp = tx_post(base_url, token, "/employee/employment", emp_body)
+            })
             print(f"create_employment: {_} {str(emp_resp)[:100]}")
 
     return status in (200, 201)
@@ -232,11 +265,11 @@ def create_customer(base_url, token, e):
     if "phone" in e: body["phoneNumber"] = e["phone"]
     if "organizationNumber" in e: body["organizationNumber"] = e["organizationNumber"]
     
-    # Include physical address if provided
-    addr = e.get("address", {})
+    # Include physical address if provided (LLM may use "address" or "physicalAddress" as key)
+    addr = e.get("address") or e.get("physicalAddress") or {}
     if addr:
         body["physicalAddress"] = {
-            "addressLine1": addr.get("street", ""),
+            "addressLine1": addr.get("street") or addr.get("addressLine1", ""),
             "postalCode": addr.get("postalCode", ""),
             "city": addr.get("city", ""),
             "country": {"id": 161},  # Norway
@@ -250,7 +283,9 @@ def create_customer(base_url, token, e):
 def create_supplier(base_url, token, e):
     body = {"isSupplier": True}
     if "name" in e: body["name"] = e["name"]
-    if "email" in e: body["email"] = e["email"]
+    if "email" in e:
+        body["email"] = e["email"]
+        body["invoiceEmail"] = e["email"]  # Tripletex checks both fields
     if "phone" in e: body["phoneNumber"] = e["phone"]
     if "organizationNumber" in e: body["organizationNumber"] = e["organizationNumber"]
     if "bankAccountNumber" in e: body["bankAccountNumber"] = e["bankAccountNumber"]
@@ -276,8 +311,8 @@ def create_product(base_url, token, e):
         body["priceIncludingVatCurrency"] = float(e["priceIncVat"])
     
     # Norwegian standard VAT type IDs (Tripletex constants)
-    # 3=25% standard, 33=15% food/drink, 31=0% books/exempt
-    NOK_VAT = {"25": 3, "15": 33, "12": 5, "0": 31}
+    # Verified against sandbox: 3=25%, 31=15% food, 32=12% transport, 6=0% exempt
+    NOK_VAT = {"25": 3, "15": 31, "12": 32, "0": 6}
     vat_pct = str(e.get("vatType", "25")).replace("%", "").strip().split(".")[0]
     vat_id = NOK_VAT.get(vat_pct, 3)
     body["vatType"] = {"id": vat_id}
@@ -287,73 +322,87 @@ def create_product(base_url, token, e):
     return status in (200, 201)
 
 
+def ensure_ledger_bank_account(base_url, token):
+    """Tripletex invoicing requires ledger account 1920 (Bankinnskudd) to have a bank account.
+    Each fresh sandbox starts with an empty bankAccountNumber — set it before invoicing."""
+    st, resp = tx_get(base_url, token, "/ledger/account", {"number": "1920", "fields": "id,number,bankAccountNumber"})
+    if st not in (200, 201):
+        print(f"GET /ledger/account failed: {st}")
+        return
+    accts = resp.get("values", [])
+    if not accts:
+        print("No ledger account 1920 found")
+        return
+    acct = accts[0]
+    if acct.get("bankAccountNumber"):
+        return  # Already set
+    acct_id = acct["id"]
+    st2, resp2 = tx_put(base_url, token, f"/ledger/account/{acct_id}", {
+        "id": acct_id,
+        "number": 1920,
+        "name": "Bankinnskudd",
+        "bankAccountNumber": "86010517941",  # Valid MOD11 Norwegian account
+    })
+    print(f"Set ledger 1920 bank account: {st2} {str(resp2)[:150]}")
+
+
 def create_invoice(base_url, token, e):
     from datetime import date, timedelta
     today = str(date.today())
     due = str(date.today() + timedelta(days=30))
-    
-    # Find or create customer
+
+    # Step 1: Set bank account on ledger 1920 (required before any invoice creation)
+    ensure_ledger_bank_account(base_url, token)
+
+    # Step 2: Create customer (sandbox is always fresh — skip GET, just POST)
     customer_name = e.get("customerName", "")
-    customer_id = None
-    
+    cust_body = {"name": customer_name or "Customer", "isCustomer": True}
     if e.get("customerOrgNumber"):
-        _, cr = tx_get(base_url, token, "/customer", {"organizationNumber": e["customerOrgNumber"], "fields": "id,name", "count": 5})
-        customers = cr.get("values", [])
-        if customers:
-            customer_id = customers[0]["id"]
-    if not customer_id and customer_name:
-        _, cr = tx_get(base_url, token, "/customer", {"name": customer_name, "fields": "id,name", "count": 5})
-        customers = cr.get("values", [])
-        if customers:
-            customer_id = customers[0]["id"]
+        cust_body["organizationNumber"] = e["customerOrgNumber"]
+    _, cr = tx_post(base_url, token, "/customer", cust_body)
+    customer_id = cr.get("value", {}).get("id")
     if not customer_id:
-        _, cr = tx_post(base_url, token, "/customer", {"name": customer_name or "Customer", "isCustomer": True})
-        customer_id = cr.get("value", {}).get("id")
-    
-    if not customer_id:
-        print("No customer ID found")
+        print(f"create customer failed: {str(cr)[:200]}")
         return False
-    
-    # Create order
+
+    # Step 3: Build order lines
+    lines = e.get("lines", e.get("orderLines", []))
+    if not lines and (e.get("description") or e.get("amount")):
+        lines = [{"description": e.get("description", "Service"),
+                  "unitPrice": e.get("amount", 0), "count": 1}]
+
+    order_lines = []
+    for l in lines:
+        price = float(l.get("unitPrice") or l.get("unitPriceExcludingVatCurrency") or 0)
+        order_lines.append({
+            "description": l.get("description", "Service"),
+            "unitPriceExcludingVatCurrency": price,
+            "count": float(l.get("count", 1)),
+        })
+    if not order_lines:
+        order_lines = [{"description": "Service", "unitPriceExcludingVatCurrency": 0.0, "count": 1.0}]
+
+    # Step 4: Create order
     order_body = {
         "customer": {"id": customer_id},
         "orderDate": e.get("orderDate", today),
         "deliveryDate": e.get("dueDate", due),
-        "isPrioritizeAmountsIncludingVat": False,
+        "orderLines": order_lines,
     }
-    lines = e.get("lines", [])
-    if lines:
-        order_body["orderLines"] = [
-            {
-                "description": l.get("description", "Service"),
-                "unitPriceExcludingVatCurrency": float(l.get("unitPrice", 0)),
-                "count": float(l.get("count", 1)),
-            }
-            for l in lines
-        ]
-    else:
-        order_body["orderLines"] = [{"description": "Service", "unitPriceExcludingVatCurrency": float(e.get("amount", 0)), "count": 1.0}]
-    
     st_ord, order_resp = tx_post(base_url, token, "/order", order_body)
     order_id = order_resp.get("value", {}).get("id")
-    print(f"create_order: {st_ord} id={order_id} resp={str(order_resp)[:200]}")
-    
+    print(f"create_order: {st_ord} id={order_id}")
     if not order_id:
+        print(f"order failed: {str(order_resp)[:200]}")
         return False
-    
+
+    # Step 5: Convert order → invoice via PUT /order/{id}/:invoice
     inv_date = e.get("orderDate", today)
-    due_date = e.get("dueDate", due)
-    
-    # POST /invoice with orders reference (canonical approach per docs)
-    inv_body = {
-        "invoiceDate": inv_date,
-        "invoiceDueDate": due_date,
-        "customer": {"id": customer_id},
-        "orders": [{"id": order_id}]
-    }
-    status2, inv_resp2 = tx_post(base_url, token, "/invoice", inv_body)
-    print(f"POST /invoice with order ref: {status2} {str(inv_resp2)[:300]}")
-    return status2 in (200, 201)
+    st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
+                               params={"invoiceDate": inv_date, "sendToCustomer": "false"})
+    invoice_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
+    print(f"PUT /order/:invoice: {st_inv} invoice_id={invoice_id} {str(inv_resp)[:200]}")
+    return st_inv in (200, 201)
 
 
 def create_project(base_url, token, e):
@@ -379,11 +428,20 @@ def create_project(base_url, token, e):
         _, cr2 = tx_post(base_url, token, "/customer", {"name": e["customerName"], "isCustomer": True})
         customer_id = cr2.get("value", {}).get("id")
     
-    # Find project manager by email or name (handle both combined and split name)
+    # Find project manager — handle both flat keys and nested projectManager dict
     pm_id = None
-    pm_first = e.get("projectManagerFirstName") or (e.get("projectManagerName", "").split() or [""])[0]
-    pm_last = e.get("projectManagerLastName") or (" ".join(e.get("projectManagerName", "").split()[1:]) if e.get("projectManagerName") else "")
-    pm_email = e.get("projectManagerEmail")
+    pm_obj = e.get("projectManager") or {}  # nested dict from LLM
+    pm_first = (
+        e.get("projectManagerFirstName")
+        or pm_obj.get("firstName")
+        or (e.get("projectManagerName", "").split() or [""])[0]
+    )
+    pm_last = (
+        e.get("projectManagerLastName")
+        or pm_obj.get("lastName")
+        or (" ".join(e.get("projectManagerName", "").split()[1:]) if e.get("projectManagerName") else "")
+    )
+    pm_email = e.get("projectManagerEmail") or pm_obj.get("email")
     
     if pm_email:
         _, er = tx_get(base_url, token, "/employee", {"email": pm_email, "fields": "id", "count": 5})
