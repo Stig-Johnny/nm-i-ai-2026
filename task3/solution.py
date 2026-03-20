@@ -170,44 +170,42 @@ def initial_grid_to_priors(grid):
                 priors[y][x][0] = 0.98
             elif raw == 5:  # Ruin — static (100% Ruin class=5)
                 priors[y][x][5] = 0.98
-            elif raw == 4:  # Ocean terrain — calibrated from R1-R5 ground truth (25 seeds)
+            elif raw == 4:  # Ocean terrain — calibrated from R1-R6 ground truth (30 seeds)
                 # [Empty, Forest, Settlement, Mountain, Ocean, Ruin]
-                # KEY FINDING: neighbor count and distance are NOT strong predictors.
-                # All val=4 cells hover at 0.77-0.80 Ocean regardless of connectivity.
-                # Flat prior: E=7.1% F=11.6% S=0.9% M=1.1% O=79.4%
-                # Distance buckets show minor variation (used only for Settlement):
+                # Flat global: E=8.4% F=13.9% S=1.0% M=1.5% O=75.3%
+                # Distance-based (only Settlement varies meaningfully):
                 if dist <= 3:
-                    # Adj settlement: slight Settlement signal (3.3%), lower Ocean
-                    priors[y][x] = [0.081, 0.119, 0.033, 0.011, 0.756, 0.000]
+                    # Adj settlement: S=4.2%, O=71.2%
+                    priors[y][x] = [0.088, 0.143, 0.042, 0.015, 0.712, 0.000]
                 elif dist <= 8:
-                    # Mid: S=0.8%, O=81.4%
-                    priors[y][x] = [0.068, 0.099, 0.008, 0.011, 0.814, 0.000]
+                    # Mid: S=1.0%, O=78.7%
+                    priors[y][x] = [0.076, 0.114, 0.010, 0.015, 0.787, 0.000]
                 else:
-                    # Far: S=0.8%, O=79.3% (NOT 92% — empirical R1-R5 shows ~79%)
-                    priors[y][x] = [0.071, 0.118, 0.008, 0.011, 0.793, 0.000]
-            elif raw == 11:  # Fog of war — calibrated from R1-R5 ground truth (25 seeds)
+                    # Far: S=0.9%, O=75.0% (empirical R1-R6 — NOT 92%+ as earlier versions assumed)
+                    priors[y][x] = [0.085, 0.141, 0.009, 0.015, 0.750, 0.000]
+            elif raw == 11:  # Fog of war — calibrated from R1-R6 ground truth (30 seeds)
                 # [Empty, Forest, Settlement, Mountain, Ocean, Ruin]
-                # Settlement IS present near settlements (2.5% dist<=5, 0.8% far)
-                # Distance to settlement is the primary predictor
+                # Global: E=80.3% F=13.4% S=1.1% M=1.4% O=3.8%
+                # Settlement IS present near settlements (3.0% dist<=5, 0.9% far)
                 if dist <= 5:
-                    # Near settlement: E=81.2% F=11.5% S=2.5% M=1.1% O=3.7%
-                    priors[y][x] = [0.812, 0.115, 0.025, 0.011, 0.037, 0.000]
+                    # Near settlement: E=78.7% F=13.1% S=3.0% M=1.4% O=3.9%
+                    priors[y][x] = [0.787, 0.131, 0.030, 0.014, 0.039, 0.000]
                 else:
-                    # Far from settlement: E=83.7% F=11.2% S=0.8% M=1.1% O=3.3%
-                    priors[y][x] = [0.837, 0.112, 0.008, 0.011, 0.033, 0.000]
-            elif raw == 1:  # Forest/transition terrain — calibrated from R1-R5 (25 seeds)
+                    # Far from settlement: E=80.4% F=13.5% S=0.9% M=1.4% O=3.8%
+                    priors[y][x] = [0.804, 0.135, 0.009, 0.014, 0.038, 0.000]
+            elif raw == 1:  # Forest/transition terrain — calibrated from R1-R6 (30 seeds)
                 # [Empty, Forest, Settlement, Mountain, Ocean, Ruin]
-                # Distance to settlement matters: far cells have more Forest, near have more Empty
-                # Settlement is ~0.4-0.7% (minimal but non-zero)
+                # Global: E=45.4% F=30.5% S=0.4% M=2.7% O=21.1%
+                # Distance to settlement: near=more Empty, far=more Forest
                 if dist <= 5:
-                    # Near settlement: E=52.7% F=21.1% S=0.7% M=2.4% O=23.9%
-                    priors[y][x] = [0.527, 0.211, 0.007, 0.024, 0.239, 0.000]
+                    # Near: E=51.3% F=22.7% S=0.7% M=2.7% O=23.4%
+                    priors[y][x] = [0.513, 0.227, 0.007, 0.027, 0.234, 0.000]
                 else:
-                    # Far from settlement: E=46.7% F=28.5% S=0.4% M=2.4% O=21.9%
-                    priors[y][x] = [0.467, 0.285, 0.004, 0.024, 0.219, 0.000]
-            elif raw == 2:  # Settlement/port terrain — calibrated from R1-R5 (n=48)
-                # val=2 empirical: E=48.3% F=8.1% S=18.4% M=2.2% O=23.0%
-                priors[y][x] = [0.483, 0.081, 0.184, 0.022, 0.230, 0.000]
+                    # Far: E=45.1% F=30.8% S=0.3% M=2.7% O=21.0%
+                    priors[y][x] = [0.451, 0.308, 0.003, 0.027, 0.210, 0.000]
+            elif raw == 2:  # Settlement/port terrain — calibrated from R1-R6 (n=53)
+                # val=2 empirical: E=46.7% F=9.1% S=19.7% M=2.4% O=22.1%
+                priors[y][x] = [0.467, 0.091, 0.197, 0.024, 0.221, 0.000]
             elif raw == 3:  # Unknown — conservative flat prior
                 priors[y][x] = [0.25, 0.20, 0.10, 0.20, 0.20, 0.05]
             elif raw == 0:  # Empty
