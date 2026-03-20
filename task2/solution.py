@@ -799,6 +799,8 @@ def handle_create_invoice(base_url, token, e):
     }
     if invoice_comment:
         order_body["invoiceComment"] = invoice_comment
+    order_body["invoicesDueIn"] = 14
+    order_body["invoicesDueInType"] = "DAYS"
     st_ord, order_resp = tx_post(base_url, token, "/order", order_body)
     order_id = order_resp.get("value", {}).get("id")
     print(f"create_order: {st_ord} id={order_id}")
@@ -808,6 +810,7 @@ def handle_create_invoice(base_url, token, e):
 
     # Convert order to invoice and send
     inv_date = e.get("invoiceDate") or e.get("orderDate") or today
+    inv_due = e.get("invoiceDueDate") or e.get("dueDate") or str(date.today() + timedelta(days=14))
     st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
                                params={"invoiceDate": inv_date, "sendToCustomer": "false"})
     invoice_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
@@ -924,6 +927,10 @@ def handle_create_travel_expense(base_url, token, e):
             cost_body["paymentType"] = {"id": pt_id}
         st_c, cr = tx_post(base_url, token, "/travelExpense/cost", cost_body)
         print(f"  cost '{desc}' {amt}: {st_c}")
+
+    # Deliver the travel expense
+    st_del, _ = tx_put(base_url, token, f"/travelExpense/:deliver", params={"id": te_id})
+    print(f"deliver travel expense: {st_del}")
 
     return True
 
@@ -1108,6 +1115,30 @@ def handle_run_payroll(base_url, token, e):
 
     base_salary = float(e.get("baseSalary") or e.get("salary") or 0)
     bonus = float(e.get("bonus") or 0)
+
+    # Ensure employee has employment record (required for salary/transaction)
+    st_emp, emp_resp = tx_get(base_url, token, "/employee/employment", {"employeeId": emp_id, "fields": "id", "count": 1})
+    existing_employment = emp_resp.get("values", [])
+    if not existing_employment:
+        emp_body = {
+            "employee": {"id": emp_id},
+            "startDate": "2024-01-01",
+        }
+        st_e, resp_e = tx_post(base_url, token, "/employee/employment", emp_body)
+        employment_id = resp_e.get("value", {}).get("id")
+        print(f"create employment: {st_e} id={employment_id}")
+
+        # Add employment details with salary
+        if employment_id and base_salary > 0:
+            det_body = {
+                "employment": {"id": employment_id},
+                "date": "2024-01-01",
+                "salary": round(base_salary, 2),
+            }
+            st_d, resp_d = tx_post(base_url, token, "/employee/employment/details", det_body)
+            print(f"employment details: {st_d}")
+    else:
+        print(f"employment exists: id={existing_employment[0]['id']}")
 
     # Get salary type IDs (these are per-company, need to look up)
     _, st_resp = tx_get(base_url, token, "/salary/type", {"count": 60, "fields": "id,number,name"})

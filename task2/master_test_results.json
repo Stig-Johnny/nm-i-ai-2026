@@ -1,0 +1,353 @@
+[
+  {
+    "prompt": "Crea el producto \"Mantenimiento\" con número de producto 7266",
+    "task_type": "create_product",
+    "lang": "ES",
+    "status": "FAIL",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Crea el proyecto \"Actualización Sierra\" vinculado al cliente",
+    "task_type": "create_project",
+    "lang": "ES",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Crea una factura para el cliente Sierra SL (org. nº 83205258",
+    "task_type": "create_invoice",
+    "lang": "ES",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Crea y envía una factura al cliente Luna SL (org. nº 9315979",
+    "task_type": "create_invoice",
+    "lang": "ES",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Crea y envía una factura al cliente Solmar SL (org. nº 89329",
+    "task_type": "create_invoice",
+    "lang": "ES",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Create an invoice for the customer Ridgepoint Ltd (org no. 8",
+    "task_type": "create_invoice",
+    "lang": "EN",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Create the customer Brightstone Ltd with organization number",
+    "task_type": "create_customer",
+    "lang": "EN",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Create three departments in Tripletex: \"Innkjøp\", \"Drift\", a",
+    "task_type": "create_department",
+    "lang": "EN",
+    "status": "FAIL",
+    "errors": []
+  },
+  {
+    "prompt": "Crie o projeto \"Análise Porto\" vinculado ao cliente Porto Al",
+    "task_type": "create_project",
+    "lang": "PT",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Crie o projeto \"Integração Porto\" vinculado ao cliente Porto",
+    "task_type": "create_project",
+    "lang": "PT",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Crie um pedido para o cliente Horizonte Lda (org. nº 9041303",
+    "task_type": "invoice_with_payment",
+    "lang": "PT",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Crie uma dimensão contabilística personalizada \"Region\" com ",
+    "task_type": "create_accounting_dimension",
+    "lang": "PT",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Créez et envoyez une facture au client Prairie SARL (nº org.",
+    "task_type": "create_invoice",
+    "lang": "FR",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Créez trois départements dans Tripletex : \"Økonomi\", \"Kvalit",
+    "task_type": "create_department",
+    "lang": "FR",
+    "status": "FAIL",
+    "errors": []
+  },
+  {
+    "prompt": "Der Kunde Windkraft GmbH (Org.-Nr. 954808483) hat eine offen",
+    "task_type": "register_payment",
+    "lang": "DE",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Ejecute la nómina de María Rodríguez (maria.rodriguez@exampl",
+    "task_type": "run_payroll",
+    "lang": "ES",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Erstellen Sie das Projekt \"Implementierung Eichenhof\" verknü",
+    "task_type": "create_project",
+    "lang": "DE",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Erstellen Sie den Kunden Bergwerk GmbH mit der Organisations",
+    "task_type": "create_customer",
+    "lang": "DE",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Erstellen Sie einen Auftrag für den Kunden Waldstein GmbH (O",
+    "task_type": "invoice_with_payment",
+    "lang": "DE",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Erstellen und senden Sie eine Rechnung an den Kunden Bergwer",
+    "task_type": "create_invoice",
+    "lang": "DE",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Kjør lønn for Erik Nilsen (erik.nilsen@example.org) for denn",
+    "task_type": "run_payroll",
+    "lang": "NO",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Le paiement de Étoile SARL (nº org. 943745862) pour la factu",
+    "task_type": "reverse_voucher",
+    "lang": "FR",
+    "status": "FAIL",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Nous avons un nouvel employé nommé Jules Richard, né le 2. A",
+    "task_type": "create_employee",
+    "lang": "??",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Opprett ein ordre for kunden Strandvik AS (org.nr 911845016)",
+    "task_type": "invoice_with_payment",
+    "lang": "NO",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Opprett en faktura til kunden Brattli AS (org.nr 950556897) ",
+    "task_type": "create_invoice",
+    "lang": "NO",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Opprett og send en faktura til kunden Testfirma AS (org.nr. ",
+    "task_type": "create_invoice",
+    "lang": "NO",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Opprett prosjektet \"Migrasjon Fossekraft\" knytt til kunden F",
+    "task_type": "create_project",
+    "lang": "NO",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Opprett tre avdelinger i Tripletex: \"Økonomi\", \"Markedsførin",
+    "task_type": "create_department",
+    "lang": "NO",
+    "status": "FAIL",
+    "errors": []
+  },
+  {
+    "prompt": "Processe o salário de Ana Ferreira (ana.ferreira@example.org",
+    "task_type": "run_payroll",
+    "lang": "PT",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Processe o salário de Lucas Santos (lucas.santos@example.org",
+    "task_type": "run_payroll",
+    "lang": "PT",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Processe o salário de Sofia Sousa (sofia.sousa@example.org) ",
+    "task_type": "run_payroll",
+    "lang": "PT",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Registe 23 horas para Tiago Santos (tiago.santos@example.org",
+    "task_type": "project_invoice",
+    "lang": "PT",
+    "status": "WARN",
+    "errors": [
+      "422",
+      "422"
+    ]
+  },
+  {
+    "prompt": "Registrer 11 timar for Sigrid Haugen (sigrid.haugen@example.",
+    "task_type": "project_invoice",
+    "lang": "NO",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Registrer en reiseregning for Magnus Haugen (magnus.haugen@e",
+    "task_type": "create_travel_expense",
+    "lang": "NO",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrer leverandøren Fossekraft AS med organisasjonsnummer",
+    "task_type": "create_supplier",
+    "lang": "NO",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrer leverandøren Havbris AS med organisasjonsnummer 84",
+    "task_type": "create_supplier",
+    "lang": "NO",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrer leverandøren Sjøbris AS med organisasjonsnummer 81",
+    "task_type": "create_supplier",
+    "lang": "NO",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrer leverandøren Vestfjord AS med organisasjonsnummer ",
+    "task_type": "create_supplier",
+    "lang": "NO",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrieren Sie den Lieferanten Brückentor GmbH mit der Org",
+    "task_type": "create_supplier",
+    "lang": "DE",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrieren Sie den Lieferanten Waldstein GmbH mit der Orga",
+    "task_type": "create_supplier",
+    "lang": "DE",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Run payroll for Daniel Smith (daniel.smith@example.org) for ",
+    "task_type": "run_payroll",
+    "lang": "EN",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Sett fastpris 374900 kr på prosjektet \"Datasikkerhet\" for Sn",
+    "task_type": "project_invoice",
+    "lang": "??",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Vi har mottatt faktura INV-2026-3624 fra leverandøren Tindra",
+    "task_type": "register_supplier_invoice",
+    "lang": "NO",
+    "status": "WARN",
+    "errors": [
+      "500"
+    ]
+  },
+  {
+    "prompt": "Vi har mottatt faktura INV-2026-8584 fra leverandøren Snøhet",
+    "task_type": "register_supplier_invoice",
+    "lang": "NO",
+    "status": "WARN",
+    "errors": [
+      "500"
+    ]
+  },
+  {
+    "prompt": "We have a new employee named Sophie Clark, born 3. March 198",
+    "task_type": "create_employee",
+    "lang": "EN",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Wir haben einen neuen Mitarbeiter namens Anna Schneider, geb",
+    "task_type": "create_employee",
+    "lang": "??",
+    "status": "FAIL",
+    "errors": [
+      "422"
+    ]
+  }
+]
