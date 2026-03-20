@@ -495,34 +495,112 @@ def create_department(base_url, token, e):
 
 
 def create_travel_expense(base_url, token, e):
-    # Need employee ID
-    emp_name = e.get("employeeName", "")
-    emp_id = e.get("employeeId")
-    
-    if not emp_id and emp_name:
-        _, emp_resp = tx_get(base_url, token, "/employee", {"firstName": emp_name.split()[0], "fields": "id,firstName,lastName", "count": 5})
-        employees = emp_resp.get("values", [])
-        if employees:
-            emp_id = employees[0]["id"]
-    
-    if not emp_id:
-        # Get any employee
-        _, emp_resp = tx_get(base_url, token, "/employee", {"fields": "id,firstName,lastName", "count": 1})
-        employees = emp_resp.get("values", [])
-        if employees:
-            emp_id = employees[0]["id"]
-    
     from datetime import date
-    body = {
+    today = str(date.today())
+
+    # Step 1: Find or create employee
+    emp_id = e.get("employeeId")
+    if not emp_id:
+        emp_email = e.get("employeeEmail", "")
+        emp_name = e.get("employeeName", "")
+        # Try to find by email
+        if emp_email:
+            _, er = tx_get(base_url, token, "/employee", {"email": emp_email, "fields": "id", "count": 1})
+            emps = er.get("values", [])
+            if emps:
+                emp_id = emps[0]["id"]
+        if not emp_id:
+            # Create the employee
+            dept_id = get_default_department(base_url, token)
+            parts = emp_name.split() if emp_name else ["Unknown", "Employee"]
+            emp_body = {
+                "firstName": parts[0],
+                "lastName": " ".join(parts[1:]) or "Employee",
+                "userType": "STANDARD",
+            }
+            if emp_email:
+                emp_body["email"] = emp_email
+            if dept_id:
+                emp_body["department"] = {"id": dept_id}
+            _, emp_resp = tx_post(base_url, token, "/employee", emp_body)
+            emp_id = emp_resp.get("value", {}).get("id")
+            if emp_id:
+                requests.put(f"{base_url}/employee/entitlement/:grantEntitlementsByTemplate",
+                             auth=("0", token), params={"employeeId": emp_id, "template": "ALL_PRIVILEGES"},
+                             timeout=30)
+
+    # Step 2: Create travel expense (title required, date required; NO deliveryDate)
+    te_body = {
         "employee": {"id": emp_id or 0},
-        "date": e.get("date", str(date.today())),
+        "title": e.get("description") or e.get("title", "Reise"),
+        "date": e.get("date", today),
     }
-    if "description" in e:
-        body["comment"] = e["description"]
-    
-    status, resp = tx_post(base_url, token, "/travelExpense", body)
-    print(f"create_travel_expense: {status} {str(resp)[:200]}")
-    return status in (200, 201)
+    st_te, te_resp = tx_post(base_url, token, "/travelExpense", te_body)
+    te_id = te_resp.get("value", {}).get("id")
+    print(f"create_travel_expense: {st_te} id={te_id} {str(te_resp)[:150]}")
+    if not te_id:
+        return False
+
+    # Step 3: Get cost categories and payment types (fetch once)
+    _, cats = tx_get(base_url, token, "/travelExpense/costCategory", {"count": 100})
+    cat_list = cats.get("values", [])
+    # Build keyword→id map for common categories
+    cat_map = {}
+    for c in cat_list:
+        if not c.get("showOnTravelExpenses"):
+            continue
+        desc = c.get("description", "").lower()
+        cat_map[c["id"]] = desc
+    # Reverse lookup by keyword
+    def find_cat(*keywords):
+        for cid, desc in cat_map.items():
+            for kw in keywords:
+                if kw in desc:
+                    return cid
+        return list(cat_map.keys())[0] if cat_map else None
+
+    _, pts = tx_get(base_url, token, "/invoice/paymentType", {"count": 5})
+    pt_list = pts.get("values", [])
+    pt_id = pt_list[0]["id"] if pt_list else None
+
+    # Step 4: Add cost lines
+    expenses = e.get("expenses", [])
+    # Also handle diet as a cost line if present
+    diet = e.get("diet", {})
+    if diet and diet.get("total"):
+        expenses = [{"description": "Diett", "amount": diet["total"]}] + list(expenses)
+
+    for exp in expenses:
+        desc = exp.get("description", "").lower()
+        amt = float(exp.get("amount", 0))
+        # Match category
+        if "fly" in desc or "billett" in desc:
+            cat_id = find_cat("fly", "flybillett")
+        elif "taxi" in desc:
+            cat_id = find_cat("taxi")
+        elif "hotell" in desc:
+            cat_id = find_cat("hotell")
+        elif "diett" in desc or "diet" in desc or "kost" in desc:
+            cat_id = find_cat("mat", "diett", "reisekost")
+        elif "tog" in desc or "train" in desc:
+            cat_id = find_cat("tog", "train")
+        elif "buss" in desc or "bus" in desc:
+            cat_id = find_cat("buss", "kollektiv")
+        else:
+            cat_id = find_cat("reisekostnad", "annen")
+        if not cat_id:
+            continue
+        cost_body = {
+            "travelExpense": {"id": te_id},
+            "costCategory": {"id": cat_id},
+            "date": e.get("date", today),
+            "amountCurrencyIncVat": amt,
+            "paymentType": {"id": pt_id},
+        }
+        st_c, cr = tx_post(base_url, token, "/travelExpense/cost", cost_body)
+        print(f"add cost {desc} {amt}: {st_c} {str(cr)[:100]}")
+
+    return True
 
 
 def delete_travel_expense(base_url, token, e):
