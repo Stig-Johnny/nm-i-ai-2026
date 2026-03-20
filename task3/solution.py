@@ -550,19 +550,9 @@ def main():
 
             for r in rounds:
                 if r.get("status") == "active" and r["id"] not in seen_rounds:
-                    # Check if we already submitted for this round
-                    try:
-                        budget = get_budget(s)
-                    except Exception:
-                        budget = {}
-
-                    # Skip if we already used queries (old poller handled it)
-                    # With pure-prior strategy, queries_used will always be 0 for our runs
-                    if budget.get("queries_used", 0) > 0:
-                        print(f"\nRound {r['round_number']} already has {budget['queries_used']} queries used — skipping")
-                        seen_rounds.add(r["id"])
-                        continue
-
+                    # With pure-prior strategy, we always submit (no query budget dependency).
+                    # Queries may have been used by external processes — we still overwrite
+                    # with our calibrated priors which are empirically better.
                     seen_rounds.add(r["id"])
                     print(f"\nRound {r['round_number']} is active!")
 
