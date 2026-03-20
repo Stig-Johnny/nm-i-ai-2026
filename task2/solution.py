@@ -416,87 +416,6 @@ def parse_with_claude(prompt, file_texts):
         return None
 
 # ============================================================
-# Entity key normalization — map all LLM variants to canonical names
-# ============================================================
-
-_KEY_MAP = {
-    # Customer / Supplier / Person name
-    "name": "name",
-    "projectName": "projectName",
-    "project": "projectName",
-    "customerName": "customerName",
-    "supplierName": "supplierName",
-    "employeeName": "employeeName",
-    "contactName": "name",
-    "fullName": "employeeName",
-    "personName": "employeeName",
-    # Price / amount
-    "unitPrice": "unitPrice",
-    "netPrice": "unitPrice",
-    "priceExcludingVat": "unitPrice",
-    "priceExcludingVatCurrency": "unitPrice",
-    "unitPriceExcludingVatCurrency": "unitPrice",
-    "price": "unitPrice",
-    "amount": "amount",
-    "totalAmount": "amount",
-    "totalAmountInclVat": "totalAmountInclVat",
-    "totalAmountIncVat": "totalAmountInclVat",
-    "totalAmountExclVat": "netAmount",
-    "netAmount": "netAmount",
-    # Product number
-    "productNumber": "productNumber",
-    "productCode": "productNumber",
-    "number": "productNumber",
-    "articleNumber": "productNumber",
-    "itemNumber": "productNumber",
-    # Project manager
-    "projectManager": "projectManagerName",
-    "projectManagerName": "projectManagerName",
-    "managerName": "projectManagerName",
-    # Employee name variants
-    "firstName": "firstName",
-    "lastName": "lastName",
-    # Description
-    "description": "description",
-    "comment": "description",
-    "subject": "description",
-    "title": "title",
-    # Org number
-    "organizationNumber": "organizationNumber",
-    "orgNumber": "organizationNumber",
-    "customerOrgNumber": "customerOrgNumber",
-    "supplierOrgNumber": "organizationNumber",
-    "orgNr": "organizationNumber",
-    # Dates
-    "invoiceDate": "invoiceDate",
-    "orderDate": "orderDate",
-    "dueDate": "invoiceDueDate",
-    "invoiceDueDate": "invoiceDueDate",
-    "paymentDueDate": "invoiceDueDate",
-    "startDate": "startDate",
-    "endDate": "endDate",
-}
-
-def normalize_entity(e):
-    """Normalize LLM-returned entity keys to canonical names. Idempotent."""
-    if not isinstance(e, dict):
-        return e
-    out = {}
-    for k, v in e.items():
-        canonical = _KEY_MAP.get(k, k)
-        # Don't overwrite already-canonical values
-        if canonical not in out:
-            out[canonical] = v
-        elif v and not out[canonical]:
-            out[canonical] = v
-    # Normalize nested lines/orderLines
-    for lkey in ("lines", "orderLines", "products"):
-        if lkey in out and isinstance(out[lkey], list):
-            out[lkey] = [normalize_entity(l) for l in out[lkey]]
-    return out
-
-
-# ============================================================
 # Shared helpers
 # ============================================================
 
@@ -618,7 +537,8 @@ def handle_create_employee(base_url, token, e):
 
     if "firstName" in e: body["firstName"] = e["firstName"]
     if "lastName" in e: body["lastName"] = e["lastName"]
-    if "email" in e: body["email"] = e["email"]
+    emp_email = e.get("email") or e.get("employeeEmail")
+    if emp_email: body["email"] = emp_email
     if e.get("dateOfBirth"): body["dateOfBirth"] = e["dateOfBirth"]
     if e.get("phoneNumberMobile") or e.get("phone") or e.get("phoneNumber"):
         body["phoneNumberMobile"] = e.get("phoneNumberMobile") or e.get("phone") or e.get("phoneNumber")
@@ -879,6 +799,8 @@ def handle_create_invoice(base_url, token, e):
     }
     if invoice_comment:
         order_body["invoiceComment"] = invoice_comment
+    order_body["invoicesDueIn"] = 14
+    order_body["invoicesDueInType"] = "DAYS"
     st_ord, order_resp = tx_post(base_url, token, "/order", order_body)
     order_id = order_resp.get("value", {}).get("id")
     print(f"create_order: {st_ord} id={order_id}")
@@ -888,8 +810,9 @@ def handle_create_invoice(base_url, token, e):
 
     # Convert order to invoice and send
     inv_date = e.get("invoiceDate") or e.get("orderDate") or today
+    inv_due = e.get("invoiceDueDate") or e.get("dueDate") or str(date.today() + timedelta(days=14))
     st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
-                               params={"invoiceDate": inv_date, "sendToCustomer": "false"})
+                               params={"invoiceDate": inv_date, "invoiceDueDate": inv_due, "sendToCustomer": "false"})
     invoice_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
     print(f"order->invoice: {st_inv} id={invoice_id}")
 
@@ -1004,6 +927,10 @@ def handle_create_travel_expense(base_url, token, e):
             cost_body["paymentType"] = {"id": pt_id}
         st_c, cr = tx_post(base_url, token, "/travelExpense/cost", cost_body)
         print(f"  cost '{desc}' {amt}: {st_c}")
+
+    # Deliver the travel expense
+    st_del, _ = tx_put(base_url, token, f"/travelExpense/:deliver", params={"id": te_id})
+    print(f"deliver travel expense: {st_del}")
 
     return True
 
@@ -1129,13 +1056,13 @@ def handle_register_supplier_invoice(base_url, token, e):
     inv_date = e.get("invoiceDate") or today
     inv_due = e.get("invoiceDueDate") or str(date.today() + timedelta(days=30))
 
-    # Build supplier invoice body — use amountExcludingVatCurrency (not amountCurrency)
-    # and omit currency field (id varies per sandbox — don't risk 500)
+    # Create supplier invoice — try with amountCurrency first (competition sandbox), fallback without
     si_body = {
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
         "invoiceNumber": e.get("invoiceNumber") or "",
-        "amountExcludingVatCurrency": round(net_amount, 2),   # net — Tripletex derives VAT
+        "amountCurrency": round(total_incl, 2),
+        "currency": {"id": 1},
         "supplier": {"id": supplier_id} if supplier_id else None,
         "voucher": {
             "date": inv_date,
@@ -1149,13 +1076,12 @@ def handle_register_supplier_invoice(base_url, token, e):
     st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
     print(f"supplierInvoice: {st} {str(resp)[:200]}")
 
-    # If still failing, retry bare minimum (just invoice metadata, no amounts)
-    if st not in (200, 201):
-        si_bare = {k: v for k, v in si_body.items()
-                   if k not in ("amountExcludingVatCurrency", "voucher")}
-        si_bare["voucher"] = si_body["voucher"]
-        st, resp = tx_post(base_url, token, "/supplierInvoice", si_bare)
-        print(f"supplierInvoice (bare retry): {st} {str(resp)[:200]}")
+    # If 500 (amountCurrency not supported), retry without it
+    if st == 500:
+        si_body.pop("amountCurrency", None)
+        si_body.pop("currency", None)
+        st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
+        print(f"supplierInvoice (retry): {st} {str(resp)[:200]}")
 
     if st in (200, 201):
         return True
@@ -1189,6 +1115,30 @@ def handle_run_payroll(base_url, token, e):
 
     base_salary = float(e.get("baseSalary") or e.get("salary") or 0)
     bonus = float(e.get("bonus") or 0)
+
+    # Ensure employee has employment record (required for salary/transaction)
+    st_emp, emp_resp = tx_get(base_url, token, "/employee/employment", {"employeeId": emp_id, "fields": "id", "count": 1})
+    existing_employment = emp_resp.get("values", [])
+    if not existing_employment:
+        emp_body = {
+            "employee": {"id": emp_id},
+            "startDate": "2024-01-01",
+        }
+        st_e, resp_e = tx_post(base_url, token, "/employee/employment", emp_body)
+        employment_id = resp_e.get("value", {}).get("id")
+        print(f"create employment: {st_e} id={employment_id}")
+
+        # Add employment details with salary
+        if employment_id and base_salary > 0:
+            det_body = {
+                "employment": {"id": employment_id},
+                "date": "2024-01-01",
+                "salary": round(base_salary, 2),
+            }
+            st_d, resp_d = tx_post(base_url, token, "/employee/employment/details", det_body)
+            print(f"employment details: {st_d}")
+    else:
+        print(f"employment exists: id={existing_employment[0]['id']}")
 
     # Get salary type IDs (these are per-company, need to look up)
     _, st_resp = tx_get(base_url, token, "/salary/type", {"count": 60, "fields": "id,number,name"})
@@ -1511,8 +1461,10 @@ def handle_project_invoice(base_url, token, e):
     today = str(date.today())
 
     # Step 1: Create customer
-    cust_name = e.get("customerName")
-    cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
+    # NOTE: LLM sometimes returns customer name as `name` (not `customerName`),
+    # especially when the entity also has projectName. Always fallback to `name`.
+    cust_name = e.get("customerName") or e.get("name")
+    cust_org = e.get("customerOrgNumber") or e.get("organizationNumber") or e.get("customerOrganizationNumber")
     customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
 
     # Step 2: Create employee (the person who worked the hours / project manager)
@@ -1646,9 +1598,19 @@ def handle_project_invoice(base_url, token, e):
     print(f"create order: {st_ord} id={order_id}")
 
     if order_id:
+        due_date = e.get("invoiceDueDate") or e.get("dueDate") or str(date.today() + timedelta(days=30))
         st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
-                                   params={"invoiceDate": today, "sendToCustomer": "false"})
-        print(f"order->invoice: {st_inv} {str(inv_resp)[:200]}")
+                                   params={"invoiceDate": today, "invoiceDueDate": due_date, "sendToCustomer": "false"})
+        invoice_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
+        print(f"order->invoice: {st_inv} id={invoice_id}")
+        # Send the invoice (try EHF for org-number companies, fall back to EMAIL)
+        if invoice_id and st_inv in (200, 201):
+            for stype in (["EHF"] if cust_org else []) + ["EMAIL"]:
+                st_send, _ = tx_put(base_url, token, f"/invoice/{invoice_id}/:send",
+                                    params={"sendType": stype})
+                print(f"send ({stype}): {st_send}")
+                if st_send in (200, 201, 204):
+                    break
 
     return True
 
@@ -1792,9 +1754,46 @@ HANDLERS = {
     "delete_invoice": handle_delete_entity,
 }
 
+def normalize_entities(entities):
+    """Add missing canonical keys from known aliases. NEVER rename — only copy."""
+    e = dict(entities)  # Don't mutate original
+
+    # Email: ensure both 'email' and 'employeeEmail' exist
+    if "email" not in e:
+        e["email"] = e.get("employeeEmail") or e.get("supplierEmail") or e.get("customerEmail")
+    if "employeeEmail" not in e:
+        e["employeeEmail"] = e.get("email")
+
+    # Name: ensure 'name' exists from variants
+    if "name" not in e:
+        e["name"] = e.get("productName") or e.get("supplierName") or e.get("customerName") or e.get("projectName")
+
+    # Org number: ensure 'organizationNumber' exists
+    if "organizationNumber" not in e:
+        e["organizationNumber"] = e.get("supplierOrgNumber") or e.get("customerOrgNumber") or e.get("orgNumber") or e.get("customerOrganizationNumber")
+
+    # Employee name: construct from firstName+lastName
+    if "employeeName" not in e:
+        first = e.get("firstName") or e.get("projectManagerFirstName") or e.get("projectLeaderFirstName") or e.get("employeeFirstName") or ""
+        last = e.get("lastName") or e.get("projectManagerLastName") or e.get("projectLeaderLastName") or e.get("employeeLastName") or ""
+        full = f"{first} {last}".strip()
+        if full:
+            e["employeeName"] = full
+
+    # Hours
+    if "hours" not in e:
+        e["hours"] = e.get("hoursWorked") or e.get("count")
+
+    # Price
+    if "priceExcludingVat" not in e:
+        e["priceExcludingVat"] = e.get("netPrice") or e.get("unitPrice") or e.get("priceExcVat") or e.get("price")
+
+    return e
+
+
 def execute_plan(base_url, token, plan, prompt):
     task_type = plan.get("task_type", "unknown")
-    entities = normalize_entity(plan.get("entities", {}))  # normalize all key variants
+    entities = normalize_entities(plan.get("entities", {}))
     print(f"Executing: {task_type} | entities: {json.dumps(entities, ensure_ascii=False)[:300]}")
 
     handler = HANDLERS.get(task_type)
