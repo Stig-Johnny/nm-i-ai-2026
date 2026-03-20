@@ -1,0 +1,217 @@
+[
+  {
+    "prompt": "Crea el producto \"Mantenimiento\" con número de producto 7266. El preci",
+    "task_type": "create_product",
+    "status": "FAIL",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Crea el proyecto \"Actualización Sierra\" vinculado al cliente Sierra SL",
+    "task_type": "create_project",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Crea una factura para el cliente Sierra SL (org. nº 832052582) con tre",
+    "task_type": "create_invoice",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Crea y envía una factura al cliente Luna SL (org. nº 931597922) por 54",
+    "task_type": "create_invoice",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Create an invoice for the customer Ridgepoint Ltd (org no. 885181066) ",
+    "task_type": "create_invoice",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Create the customer Brightstone Ltd with organization number 853284882",
+    "task_type": "create_customer",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Create three departments in Tripletex: \"Innkjøp\", \"Drift\", and \"Kundes",
+    "task_type": "create_department",
+    "status": "FAIL",
+    "errors": []
+  },
+  {
+    "prompt": "Créez et envoyez une facture au client Prairie SARL (nº org. 818016662",
+    "task_type": "create_invoice",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Créez trois départements dans Tripletex : \"Økonomi\", \"Kvalitetskontrol",
+    "task_type": "create_department",
+    "status": "FAIL",
+    "errors": []
+  },
+  {
+    "prompt": "Der Kunde Windkraft GmbH (Org.-Nr. 954808483) hat eine offene Rechnung",
+    "task_type": "register_payment",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Ejecute la nómina de María Rodríguez (maria.rodriguez@example.org) par",
+    "task_type": "run_payroll",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Erstellen Sie das Projekt \"Implementierung Eichenhof\" verknüpft mit de",
+    "task_type": "create_project",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Erstellen Sie den Kunden Bergwerk GmbH mit der Organisationsnummer 946",
+    "task_type": "create_customer",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Erstellen Sie einen Auftrag für den Kunden Waldstein GmbH (Org.-Nr. 97",
+    "task_type": "invoice_with_payment",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Erstellen und senden Sie eine Rechnung an den Kunden Bergwerk GmbH (Or",
+    "task_type": "create_invoice",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Kjør lønn for Erik Nilsen (erik.nilsen@example.org) for denne måneden.",
+    "task_type": "run_payroll",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Opprett ein ordre for kunden Strandvik AS (org.nr 911845016) med produ",
+    "task_type": "invoice_with_payment",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Opprett og send en faktura til kunden Testfirma AS (org.nr. 987654321)",
+    "task_type": "create_invoice",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Opprett tre avdelinger i Tripletex: \"Økonomi\", \"Markedsføring\" og \"Kva",
+    "task_type": "create_department",
+    "status": "FAIL",
+    "errors": []
+  },
+  {
+    "prompt": "Processe o salário de Lucas Santos (lucas.santos@example.org) para est",
+    "task_type": "run_payroll",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Processe o salário de Sofia Sousa (sofia.sousa@example.org) para este ",
+    "task_type": "run_payroll",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Registe 23 horas para Tiago Santos (tiago.santos@example.org) na ativi",
+    "task_type": "project_invoice",
+    "status": "WARN",
+    "errors": [
+      "422",
+      "422"
+    ]
+  },
+  {
+    "prompt": "Registrer en reiseregning for Magnus Haugen (magnus.haugen@example.org",
+    "task_type": "create_travel_expense",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrer leverandøren Havbris AS med organisasjonsnummer 846635408. E",
+    "task_type": "create_supplier",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrer leverandøren Sjøbris AS med organisasjonsnummer 811212717. E",
+    "task_type": "create_supplier",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrer leverandøren Vestfjord AS med organisasjonsnummer 914908787.",
+    "task_type": "create_supplier",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrieren Sie den Lieferanten Brückentor GmbH mit der Organisations",
+    "task_type": "create_supplier",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Registrieren Sie den Lieferanten Waldstein GmbH mit der Organisationsn",
+    "task_type": "create_supplier",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Run payroll for Daniel Smith (daniel.smith@example.org) for this month",
+    "task_type": "run_payroll",
+    "status": "WARN",
+    "errors": [
+      "422"
+    ]
+  },
+  {
+    "prompt": "Sett fastpris 374900 kr på prosjektet \"Datasikkerhet\" for Snøhetta AS ",
+    "task_type": "project_invoice",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Vi har mottatt faktura INV-2026-3624 fra leverandøren Tindra AS (org.n",
+    "task_type": "register_supplier_invoice",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Vi har mottatt faktura INV-2026-8584 fra leverandøren Snøhetta AS (org",
+    "task_type": "register_supplier_invoice",
+    "status": "OK",
+    "errors": []
+  },
+  {
+    "prompt": "Wir haben einen neuen Mitarbeiter namens Anna Schneider, geboren am 6.",
+    "task_type": "create_employee",
+    "status": "FAIL",
+    "errors": [
+      "422"
+    ]
+  }
+]
