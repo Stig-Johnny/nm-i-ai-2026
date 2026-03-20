@@ -111,6 +111,16 @@ def solve_with_mc(session, round_id, detail):
     queries_used = 0
     last_submit_q = 0
 
+    # Cache path — persist counts after every observation so we survive crashes
+    import os
+    cache_path = f"/tmp/astar_cache/{round_id}_mc.json"
+    os.makedirs("/tmp/astar_cache", exist_ok=True)
+
+    def save_cache():
+        with open(cache_path, "w") as _cf:
+            json.dump({"counts": counts.tolist(), "visits": visits.tolist(),
+                       "queries_used": queries_used}, _cf)
+
     print(f"\nRunning 50 queries (cycling viewports × seeds)...")
     for q_idx in range(50):
         vp_idx = q_idx % len(VIEWPORT_GRID)
@@ -132,6 +142,7 @@ def solve_with_mc(session, round_id, detail):
         else:
             print(f"  q{q_idx}: unexpected response: {obs}")
 
+        save_cache()  # persist after every observation
         time.sleep(0.22)  # ~4.5 req/sec
 
         # Resubmit every 10 queries (improve incrementally)
