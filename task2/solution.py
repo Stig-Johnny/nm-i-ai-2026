@@ -1333,9 +1333,11 @@ def handle_project_invoice(base_url, token, e):
     cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
     customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
 
-    # Step 2: Create employee (the person who worked the hours)
-    emp_name = e.get("employeeName") or (f"{e.get('firstName', '')} {e.get('lastName', '')}".strip() or None)
-    emp_email = e.get("employeeEmail")
+    # Step 2: Create employee (the person who worked the hours / project manager)
+    first = e.get("firstName") or e.get("projectManagerFirstName") or e.get("projectLeaderFirstName") or ""
+    last = e.get("lastName") or e.get("projectManagerLastName") or e.get("projectLeaderLastName") or ""
+    emp_name = e.get("employeeName") or e.get("projectManagerName") or e.get("projectManager") or e.get("projectLeaderName") or e.get("projectLeader") or (f"{first} {last}".strip() or None)
+    emp_email = e.get("employeeEmail") or e.get("projectManagerEmail") or e.get("projectLeaderEmail")
     emp_id = get_or_create_employee(base_url, token, name=emp_name, email=emp_email)
 
     # Step 3: Create project
@@ -1348,9 +1350,14 @@ def handle_project_invoice(base_url, token, e):
         proj_body["customer"] = {"id": customer_id}
     if emp_id:
         proj_body["projectManager"] = {"id": emp_id}
+    # Set fixed price if applicable
+    fixed_price = float(e.get("fixedPrice") or 0)
+    if fixed_price:
+        proj_body["isFixedPrice"] = True
+        proj_body["fixedPrice"] = fixed_price
     st, proj_resp = tx_post(base_url, token, "/project", proj_body)
     proj_id = proj_resp.get("value", {}).get("id")
-    print(f"create project: {st} id={proj_id}")
+    print(f"create project: {st} id={proj_id} {str(proj_resp)[:200] if st != 201 else ''}")
 
     # Step 4: Find or create activity
     activity_name = e.get("activityName") or e.get("activity", "Arbeid")
