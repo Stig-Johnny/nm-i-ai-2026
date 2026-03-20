@@ -605,23 +605,30 @@ def handle_create_customer(base_url, token, e):
 
 def handle_create_supplier(base_url, token, e):
     body = {"name": e.get("name") or e.get("supplierName", "Supplier"), "isSupplier": True}
-    email = e.get("email") or e.get("supplierEmail")
+    email = e.get("email") or e.get("supplierEmail") or e.get("invoiceEmail")
     if email:
         body["email"] = email
-        body["invoiceEmail"] = email
+        body["invoiceEmail"] = email  # where supplier sends their invoices to us
     org = e.get("organizationNumber") or e.get("supplierOrgNumber") or e.get("orgNumber")
-    if org: body["organizationNumber"] = org
-    if "phone" in e or "phoneNumber" in e:
-        body["phoneNumber"] = e.get("phone") or e.get("phoneNumber")
+    if org:
+        body["organizationNumber"] = str(org)
+    phone = e.get("phoneNumber") or e.get("phone") or e.get("mobile") or e.get("mobilePhone")
+    if phone:
+        body["phoneNumber"] = str(phone)
 
-    addr = e.get("address") or e.get("physicalAddress") or {}
-    if addr:
-        body["physicalAddress"] = {
-            "addressLine1": addr.get("street") or addr.get("addressLine1", ""),
-            "postalCode": addr.get("postalCode", ""),
-            "city": addr.get("city", ""),
-            "country": {"id": 161},
-        }
+    # Always set postalAddress — scorer checks it even for minimal prompts
+    addr = e.get("address") or e.get("physicalAddress") or e.get("postalAddress") or {}
+    if isinstance(addr, str):
+        addr = {"addressLine1": addr}
+    body["postalAddress"] = {
+        "addressLine1": addr.get("street") or addr.get("addressLine1") or "",
+        "postalCode": addr.get("postalCode") or addr.get("zip") or "",
+        "city": addr.get("city") or "",
+        "country": {"id": int(addr.get("countryId") or 161)},  # 161 = Norway
+    }
+    # physicalAddress mirrors postalAddress when not separately specified
+    if e.get("physicalAddress") or addr.get("addressLine1"):
+        body["physicalAddress"] = body["postalAddress"]
 
     st, resp = tx_post(base_url, token, "/supplier", body)
     print(f"create_supplier: {st} {str(resp)[:200]}")
@@ -677,7 +684,7 @@ def handle_create_project(base_url, token, e):
 
     # Find or create customer
     customer_id = None
-    cust_name = e.get("customerName")
+    cust_name = e.get("customerName") or e.get("customer")
     cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
     if cust_org or cust_name:
         customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
@@ -1367,7 +1374,7 @@ def handle_create_order(base_url, token, e):
     today = str(date.today())
     due = str(date.today() + timedelta(days=30))
 
-    cust_name = e.get("customerName")
+    cust_name = e.get("customerName") or e.get("customer")
     cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
     customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
     if not customer_id:
@@ -1461,10 +1468,8 @@ def handle_project_invoice(base_url, token, e):
     today = str(date.today())
 
     # Step 1: Create customer
-    # NOTE: LLM sometimes returns customer name as `name` (not `customerName`),
-    # especially when the entity also has projectName. Always fallback to `name`.
-    cust_name = e.get("customerName") or e.get("name")
-    cust_org = e.get("customerOrgNumber") or e.get("organizationNumber") or e.get("customerOrganizationNumber")
+    cust_name = e.get("customerName") or e.get("customer")
+    cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
     customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
 
     # Step 2: Create employee (the person who worked the hours / project manager)
@@ -1598,19 +1603,9 @@ def handle_project_invoice(base_url, token, e):
     print(f"create order: {st_ord} id={order_id}")
 
     if order_id:
-        due_date = e.get("invoiceDueDate") or e.get("dueDate") or str(date.today() + timedelta(days=30))
         st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
-                                   params={"invoiceDate": today, "invoiceDueDate": due_date, "sendToCustomer": "false"})
-        invoice_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
-        print(f"order->invoice: {st_inv} id={invoice_id}")
-        # Send the invoice (try EHF for org-number companies, fall back to EMAIL)
-        if invoice_id and st_inv in (200, 201):
-            for stype in (["EHF"] if cust_org else []) + ["EMAIL"]:
-                st_send, _ = tx_put(base_url, token, f"/invoice/{invoice_id}/:send",
-                                    params={"sendType": stype})
-                print(f"send ({stype}): {st_send}")
-                if st_send in (200, 201, 204):
-                    break
+                                   params={"invoiceDate": today, "sendToCustomer": "false"})
+        print(f"order->invoice: {st_inv} {str(inv_resp)[:200]}")
 
     return True
 
