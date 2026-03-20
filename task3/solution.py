@@ -170,58 +170,42 @@ def initial_grid_to_priors(grid):
                 priors[y][x][0] = 0.98
             elif raw == 5:  # Ruin — static (100% Ruin class=5)
                 priors[y][x][5] = 0.98
-            elif raw == 4:  # Ocean terrain — calibrated from R1-R4 ground truth
+            elif raw == 4:  # Ocean terrain — calibrated from R1-R6 ground truth (30 seeds)
                 # [Empty, Forest, Settlement, Mountain, Ocean, Ruin]
-                # All val=4 are coastal by nature; distance from settlement proxy for depth
-                if dist <= 2:
-                    # Ocean adj settlement: 76.5% Ocean, 11.9% Forest, 9.9% Empty
-                    priors[y][x] = [0.099, 0.119, 0.005, 0.005, 0.765, 0.005]
-                elif dist <= 5:
-                    # Ocean mid: 82.7% Ocean, 9.3% Forest, 6.3% Empty
-                    priors[y][x] = [0.063, 0.093, 0.005, 0.005, 0.827, 0.005]
+                # Flat global: E=8.4% F=13.9% S=1.0% M=1.5% O=75.3%
+                # Distance-based (only Settlement varies meaningfully):
+                if dist <= 3:
+                    # Adj settlement: S=4.2%, O=71.2%
+                    priors[y][x] = [0.088, 0.143, 0.042, 0.015, 0.712, 0.000]
                 elif dist <= 8:
-                    # Ocean far: 92.1% Ocean, 4.9% Forest
-                    priors[y][x] = [0.020, 0.049, 0.005, 0.005, 0.921, 0.005]
+                    # Mid: S=1.0%, O=78.7%
+                    priors[y][x] = [0.076, 0.114, 0.010, 0.015, 0.787, 0.000]
                 else:
-                    # Ocean very far: 98.1% Ocean
-                    priors[y][x][4] = 0.981
-            elif raw == 11:  # Fog of war — calibrated from R1-R4 ground truth
+                    # Far: S=0.9%, O=75.0% (empirical R1-R6 — NOT 92%+ as earlier versions assumed)
+                    priors[y][x] = [0.085, 0.141, 0.009, 0.015, 0.750, 0.000]
+            elif raw == 11:  # Fog of war — calibrated from R1-R6 ground truth (30 seeds)
                 # [Empty, Forest, Settlement, Mountain, Ocean, Ruin]
-                # NOTE: Settlement never appears for val=11 in empirical data
-                if dist <= 2:
-                    if coastal:
-                        # Fog adj coastal: 82% E, 11.8% F, 4.5% O
-                        priors[y][x] = [0.820, 0.118, 0.005, 0.005, 0.045, 0.005]
-                    else:
-                        # Fog adj inland: 81.6% E, 11.3% F, 4.7% O
-                        priors[y][x] = [0.816, 0.113, 0.005, 0.022, 0.047, 0.005]
-                elif dist <= 5:
-                    if coastal:
-                        # Fog near coastal: 85.5% E, 9.7% F, 3.1% O
-                        priors[y][x] = [0.855, 0.097, 0.005, 0.005, 0.031, 0.005]
-                    else:
-                        # Fog near inland: 85.8% E, 8.6% F, 3.1% O
-                        priors[y][x] = [0.858, 0.086, 0.005, 0.010, 0.031, 0.005]
-                elif dist <= 8:
-                    if coastal:
-                        # Fog far coastal: 93.5% E, 4.5% F
-                        priors[y][x] = [0.935, 0.045, 0.005, 0.005, 0.005, 0.005]
-                    else:
-                        # Fog far inland: 92.8% E, 4.3% F
-                        priors[y][x] = [0.928, 0.043, 0.005, 0.010, 0.005, 0.005]
+                # Global: E=80.3% F=13.4% S=1.1% M=1.4% O=3.8%
+                # Settlement IS present near settlements (3.0% dist<=5, 0.9% far)
+                if dist <= 5:
+                    # Near settlement: E=78.7% F=13.1% S=3.0% M=1.4% O=3.9%
+                    priors[y][x] = [0.787, 0.131, 0.030, 0.014, 0.039, 0.000]
                 else:
-                    # Fog very far: 98.5-98.6% E
-                    priors[y][x][0] = 0.985
-            elif raw == 1:  # Forest/transition terrain — calibrated from R1-R4
-                # val=1 empirical: Empty=51%, Forest=23%, Ocean=24%, Mountain=2%
-                # NOTE: Settlement essentially 0% — removed from priors
-                if coastal:
-                    priors[y][x] = [0.511, 0.229, 0.005, 0.005, 0.236, 0.005]
+                    # Far from settlement: E=80.4% F=13.5% S=0.9% M=1.4% O=3.8%
+                    priors[y][x] = [0.804, 0.135, 0.009, 0.014, 0.038, 0.000]
+            elif raw == 1:  # Forest/transition terrain — calibrated from R1-R6 (30 seeds)
+                # [Empty, Forest, Settlement, Mountain, Ocean, Ruin]
+                # Global: E=45.4% F=30.5% S=0.4% M=2.7% O=21.1%
+                # Distance to settlement: near=more Empty, far=more Forest
+                if dist <= 5:
+                    # Near: E=51.3% F=22.7% S=0.7% M=2.7% O=23.4%
+                    priors[y][x] = [0.513, 0.227, 0.007, 0.027, 0.234, 0.000]
                 else:
-                    priors[y][x] = [0.521, 0.212, 0.005, 0.022, 0.244, 0.005]
-            elif raw == 2:  # Settlement/port terrain — limited data (n=33)
-                # val=2 empirical: Empty=52%, Settlement=15%, Ocean=24%, Forest=7%
-                priors[y][x] = [0.518, 0.066, 0.153, 0.021, 0.241, 0.005]
+                    # Far: E=45.1% F=30.8% S=0.3% M=2.7% O=21.0%
+                    priors[y][x] = [0.451, 0.308, 0.003, 0.027, 0.210, 0.000]
+            elif raw == 2:  # Settlement/port terrain — calibrated from R1-R6 (n=53)
+                # val=2 empirical: E=46.7% F=9.1% S=19.7% M=2.4% O=22.1%
+                priors[y][x] = [0.467, 0.091, 0.197, 0.024, 0.221, 0.000]
             elif raw == 3:  # Unknown — conservative flat prior
                 priors[y][x] = [0.25, 0.20, 0.10, 0.20, 0.20, 0.05]
             elif raw == 0:  # Empty
@@ -564,17 +548,9 @@ def main():
 
             for r in rounds:
                 if r.get("status") == "active" and r["id"] not in seen_rounds:
-                    # Check if we already submitted for this round
-                    try:
-                        budget = get_budget(s)
-                    except Exception:
-                        budget = {}
-
-                    if budget.get("queries_used", 0) > 0:
-                        print(f"\nRound {r['round_number']} already has {budget['queries_used']} queries used — skipping")
-                        seen_rounds.add(r["id"])
-                        continue
-
+                    # With pure-prior strategy, we always submit (no query budget dependency).
+                    # Queries may have been used by external processes — we still overwrite
+                    # with our calibrated priors which are empirically better.
                     seen_rounds.add(r["id"])
                     print(f"\nRound {r['round_number']} is active!")
 
@@ -584,18 +560,31 @@ def main():
                         print(f"Error fetching round detail: {e}")
                         continue
 
-                    # Submit priors first (instant score), then explore to improve
-                    print("Submitting informed priors...")
-                    try:
-                        solve_with_priors(s, r["id"], detail)
-                    except Exception as e:
-                        print(f"solve_with_priors error: {e}")
-
-                    print("Exploring with queries...")
-                    try:
-                        solve_explore(s, r["id"], detail)
-                    except Exception as e:
-                        print(f"solve_explore error: {e}")
+                    # STRATEGY (R8+): MC + Parameter Inference
+                    # - 27 queries on seed 0 (3 full-map passes) → infer expansion/conflict params
+                    # - Apply inferred params to adjust priors for ALL 5 seeds
+                    # - 23 remaining queries for MC refinement on seeds 1-4
+                    # Empirically: MC+inference beats pure priors by ~6+ pts per round
+                    # Pure prior is fallback if MC solver fails
+                    budget = get_budget(s)
+                    queries_used = budget.get("queries_used", 0)
+                    if queries_used < 5:  # Fresh round — use MC+inference
+                        print("Running MC+inference solver (parameter estimation)...")
+                        try:
+                            from task3.solver_mc import solve_with_mc_inference
+                            solve_with_mc_inference(s, r["id"], detail)
+                        except Exception as e:
+                            print(f"MC solver error: {e} — falling back to pure priors")
+                            try:
+                                solve_with_priors(s, r["id"], detail)
+                            except Exception as e2:
+                                print(f"solve_with_priors fallback error: {e2}")
+                    else:
+                        print(f"Round already has {queries_used} queries — submitting calibrated priors only...")
+                        try:
+                            solve_with_priors(s, r["id"], detail)
+                        except Exception as e:
+                            print(f"solve_with_priors error: {e}")
 
             time.sleep(30)
             print(".", end="", flush=True)

@@ -677,10 +677,11 @@ def handle_create_department(base_url, token, e):
 def handle_create_project(base_url, token, e):
     today = str(date.today())
 
-    # Find or create customer
+    # Find or create customer — check all name/org variants
+    cust_name = e.get("customerName") or e.get("customer") or e.get("name")
+    cust_org = (e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
+                or e.get("organizationNumber"))  # normalizer stores it here
     customer_id = None
-    cust_name = e.get("customerName") or e.get("customer")
-    cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
     if cust_org or cust_name:
         customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
 
@@ -688,24 +689,40 @@ def handle_create_project(base_url, token, e):
     pm_id = None
     pm = e.get("projectManager") or {}
     pm_name = e.get("projectManagerName") or pm.get("name")
-    pm_first = e.get("projectManagerFirstName") or pm.get("firstName") or (pm_name.split()[0] if pm_name else None)
     pm_email = e.get("projectManagerEmail") or pm.get("email")
 
-    if pm_first or pm_email:
-        pm_id = get_or_create_employee(base_url, token, name=pm_name or pm_first, email=pm_email)
+    if pm_name or pm_email:
+        pm_id = get_or_create_employee(base_url, token, name=pm_name, email=pm_email)
 
     if not pm_id:
-        st, resp = tx_get(base_url, token, "/employee", {"fields": "id", "count": 1})
-        vals = resp.get("values", [])
-        if vals: pm_id = vals[0]["id"]
+        # Fallback: use any existing employee
+        _, emp_resp = tx_get(base_url, token, "/employee", {"fields": "id", "count": 1})
+        vals = emp_resp.get("values", [])
+        if vals:
+            pm_id = vals[0]["id"]
 
+    if not pm_id:
+        # No employees in sandbox — create a placeholder PM (required by Tripletex)
+        pm_id = get_or_create_employee(base_url, token,
+                                        name="Project Manager",
+                                        email="pm@company.no")
+
+    proj_name = e.get("projectName") or e.get("name") or "Project"
     body = {
-        "name": e.get("name") or e.get("projectName", "Project"),
-        "startDate": e.get("startDate", today),
+        "name": proj_name,
+        "startDate": e.get("startDate") or today,
     }
-    if customer_id: body["customer"] = {"id": customer_id}
-    if pm_id: body["projectManager"] = {"id": pm_id}
-    if e.get("endDate"): body["endDate"] = e["endDate"]
+    if customer_id:
+        body["customer"] = {"id": customer_id}
+    if pm_id:
+        body["projectManager"] = {"id": pm_id}
+    if e.get("endDate"):
+        body["endDate"] = e["endDate"]
+    fixed_price = e.get("fixedPrice") or e.get("fixedprice")
+    if fixed_price:
+        body["fixedprice"] = float(fixed_price)
+    if e.get("budget"):
+        body["budget"] = float(e["budget"])
 
     st, resp = tx_post(base_url, token, "/project", body)
     print(f"create_project: {st} {str(resp)[:200]}")
@@ -1460,6 +1477,63 @@ def handle_reverse_voucher(base_url, token, e):
     return st in (200, 201)
 
 
+def handle_bank_reconciliation(base_url, token, e):
+    """Bank reconciliation: match bank statement entries to ledger/payments."""
+    today = str(date.today())
+
+    # Step 1: Get bank accounts
+    _, ba_resp = tx_get(base_url, token, "/bank/statement", {"count": 10})
+    statements = ba_resp.get("values", [])
+
+    # Step 2: Get the bank account from entity or use first available
+    account_number = e.get("accountNumber") or e.get("bankAccountNumber")
+    _, acc_resp = tx_get(base_url, token, "/bankAccount", {"count": 10})
+    bank_accounts = acc_resp.get("values", [])
+    bank_acct_id = None
+    if bank_accounts:
+        if account_number:
+            for ba in bank_accounts:
+                if str(ba.get("number", "")) == str(account_number):
+                    bank_acct_id = ba["id"]
+                    break
+        if not bank_acct_id:
+            bank_acct_id = bank_accounts[0]["id"]
+
+    # Step 3: Get open ledger postings (unmatch items) on account 1920
+    ledger_acct_id = None
+    _, lac = tx_get(base_url, token, "/ledger/account", {"number": 1920, "fields": "id", "count": 1})
+    if lac.get("values"):
+        ledger_acct_id = lac["values"][0]["id"]
+
+    # Step 4: Get bank reconciliation entries and match them
+    if bank_acct_id:
+        _, rec_resp = tx_get(base_url, token, "/bank/reconciliation",
+                             {"bankAccountId": bank_acct_id, "count": 5})
+        reconciliations = rec_resp.get("values", [])
+        if not reconciliations:
+            # Create a reconciliation for today
+            rec_body = {
+                "bankAccount": {"id": bank_acct_id},
+                "closingDate": e.get("date") or today,
+                "closingBalance": float(e.get("closingBalance") or e.get("balance") or 0),
+            }
+            st_rc, rc_resp = tx_post(base_url, token, "/bank/reconciliation", rec_body)
+            print(f"create reconciliation: {st_rc}")
+            rec_id = rc_resp.get("value", {}).get("id")
+        else:
+            rec_id = reconciliations[0]["id"]
+            print(f"reconciliation exists: id={rec_id}")
+
+        if rec_id:
+            # Match all unmatched entries
+            _, match_resp = tx_put(base_url, token, f"/bank/reconciliation/{rec_id}/:match", {})
+            print(f"match: {match_resp}")
+            return True
+
+    print("bank_reconciliation: no bank account found")
+    return False
+
+
 def handle_project_invoice(base_url, token, e):
     """Tier 2: Register hours on a project and generate a project invoice."""
     today = str(date.today())
@@ -1728,6 +1802,9 @@ HANDLERS = {
     "invoice_with_payment": handle_invoice_with_payment,
     "reverse_voucher": handle_reverse_voucher,
     "delete_entity": handle_delete_entity,
+    "bank_reconciliation": handle_bank_reconciliation,
+    "reconcile_bank": handle_bank_reconciliation,
+    "bank_statement": handle_bank_reconciliation,
     "project_invoice": handle_project_invoice,
     "create_accounting_dimension": handle_create_accounting_dimension,
     "accounting_dimension": handle_create_accounting_dimension,

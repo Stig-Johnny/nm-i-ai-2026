@@ -1,60 +1,74 @@
-# Competition Status — Last Updated 2026-03-20 08:20 CET
+# Competition Status — Last Updated 2026-03-20 18:00 CET
 
-## CURRENT POSITION: #58, 56.0 points (~40 hours remaining)
+## ⚠️ REPO IS PRIVATE — MUST MAKE PUBLIC BEFORE SUNDAY 15:00 CET
+```bash
+gh repo edit Stig-Johnny/nm-i-ai-2026 --visibility public --accept-visibility-change-consequences
+```
+
+## Position: #46 overall, 60.8 points (~21 hours remaining)
 
 ## Our Scores
 
-| Task | Score | Notes |
-|------|-------|-------|
-| Tripletex | 44.3 | 8/30 task types, Tier 2 just opened (2× multiplier) |
-| NorgesGruppen | 62.0 | v4 multi-class ONNX submitted, awaiting result |
-| Astar Island | 61.6 | Round 4 scored 57.8, big improvement from priors-only |
-| **Overall** | **56.0 (#58)** | |
+| Task | Score | Rank | Owner |
+|------|-------|------|-------|
+| NorgesGruppen | 0.8974 mAP | #15/148 | Claude-5 |
+| Tripletex | 23.6 | ~#50 | Claude-4 |
+| Astar Island | 61.6 | ~#40 | iClaw-E (via Claude-3) |
 
-## Task Ownership
+## Available Models (all downloaded locally)
 
-| Task | Owner | Status |
-|------|-------|--------|
-| Tripletex | **Claude-4** (taking over) | Issue #21 has full briefing |
-| Astar Island | **iClaw-E** | Focused 100% on rounds |
-| NorgesGruppen | **Claude-5** | v4 submitted, training improvements |
+| Model | File | Size | Val mAP50 | Trained at |
+|-------|------|------|-----------|-----------|
+| YOLOv8l | best_v5_1280.onnx | 168MB | 0.674 | 1280 |
+| YOLOv8l | best_v5_640.onnx | 168MB | 0.674 | 640 export |
+| YOLOv8x FP16 | best_v8x.onnx | 131MB | 0.689 | 1280 |
+| YOLOv8x | best_1920_full.onnx | 263MB | 0.689 | 1920 |
+| YOLOv8x | best_1920_at1280.onnx | 262MB | 0.689 | 1280 export |
 
-## Active Infrastructure
+## Available Inference Scripts
 
-- **Tripletex server:** Mac Mini port 9001, tunnel `revenue-gale-lou-manor.trycloudflare.com`
-- **Astar poller:** Running on Claude-5 MacBook (`python3 task3/solution.py --poll`)
+| Script | Description |
+|--------|-------------|
+| task4/run.py | Single model ONNX (current on main) |
+| task4/run_wbf.py | WBF ensemble + flip TTA (2-3 models) |
+| task4/run_sahi.py | SAHI tiled inference (needs 640+1280 models) |
+
+## Tomorrow's Plan (6 NorgesGruppen slots)
+
+| Slot | File | Strategy | Expected |
+|------|------|----------|----------|
+| 1 | norgesgruppen-v9-wbf-v5l-v8x.zip | WBF ensemble v5l+v8x + flip TTA | 0.91-0.93 |
+| 2 | norgesgruppen-v8-1920-single.zip | v8x@1920 single | 0.89-0.91 |
+| 3 | TBD | WBF + scale TTA if slot 1 improves | 0.92-0.94 |
+| 4-6 | TBD | Iterate on best results | |
+
+## Ready Zips (tested, validated)
+
+| File | Size | Contents |
+|------|------|----------|
+| norgesgruppen-v9-wbf-v5l-v8x.zip | 259MB | WBF ensemble + flip TTA |
+| norgesgruppen-v8-1920-single.zip | 213MB | v8x@1920 single model |
+
+## Submission History
+
+| Date | Version | mAP | Rank |
+|------|---------|-----|------|
+| Mar 19 | v4 YOLOv8m@640 | 0.6724 | ~#30 |
+| Mar 20 | v5 YOLOv8l@1280 | 0.8927 | #4→#15 |
+| Mar 20 | v8x YOLOv8x@1280 | 0.8928 | #15 |
+| Mar 20 | v6 NMS ensemble v5l+v8x | 0.8974 | #15 |
+
+## Infrastructure
+
+- **Vast.ai GPU:** DESTROY — training done, weights downloaded
+- **Tripletex server:** Mac Mini port 9001, tunnel active
 - **Mac Mini SSH:** `ssh -i ~/.ssh/mac-executor claude@100.92.170.124`
+- **Astar poller:** iClaw-E owns — do NOT restart from Claude-5
 
-## NorgesGruppen Detection
+## Key Rules
 
-- v4 YOLOv8m multi-class (356 categories) trained overnight
-- ONNX export, 100MB, conf=0.001, flat COCO output
-- Submitted — awaiting result
-- Previous score: 62.2 (single-class detection only)
-- Expected improvement from multi-class classification (30% weight)
-- 2 submissions remaining today (resets midnight UTC)
-
-## Tripletex (Issue #21)
-
-- Claude-4 taking over from iClaw-E
-- Server stays on Mac Mini — Claude-4 pushes code via PR
-- iClaw-E restarts server when PRs merge
-- Tier 2 opened (2× multiplier) — big scoring opportunity
-- 8/30 task types working, many more to implement
-
-## Astar Island
-
-- iClaw-E owns this 100%
-- Round 4 scored 57.8 (best so far)
-- Round 5 submitted, awaiting score
-- Crash-safe observation caching working
-- Calibrated priors from Round 1 ground truth
-- Poller auto-detects new rounds
-
-## Key Info for New Sessions
-
-- Read `CLAUDE.md` for coding rules and banned imports
-- Branch protection on main — use PRs
-- `./scripts/check-submission.sh task4/run.py` before any NorgesGruppen zip
-- Banned imports: os, sys, subprocess, pickle, shutil, etc. (full list in CLAUDE.md)
-- Competition deadline: March 22, 15:00 CET
+- Repo must be PUBLIC before Sunday 15:00 CET
+- NorgesGruppen: 6 submissions/day, resets midnight UTC
+- Banned imports: os, sys, subprocess, pickle, shutil (full list in CLAUDE.md)
+- Best score kept forever — bad submissions don't hurt
+- Max zip: 420MB, max 3 weight files
