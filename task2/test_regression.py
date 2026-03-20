@@ -570,3 +570,37 @@ def test_C10_invoice_product_code_in_description():
     ord_posts = posts(mock, "/order")
     descs = [ol.get("description", "") for ol in ord_posts[0][2].get("orderLines", [])]
     assert all("(" not in d for d in descs), f"Descriptions still have codes: {descs}"
+
+
+def test_C11_project_invoice_fixed_price_order_has_project():
+    """Competition: Fixed price project invoice must link project to order"""
+    from task2.solution import handle_project_invoice, normalize_entities
+    mock = APIMock()
+    entities = normalize_entities({
+        "projectName": "Digital transformasjon",
+        "customerName": "Strandvik AS",
+        "customerOrgNumber": "883822684",
+        "projectManagerName": "Jorunn Brekke",
+        "projectManagerEmail": "jorunn.brekke@example.org",
+        "fixedPrice": 318800,
+        "invoicePercentage": 50,
+    })
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        result = handle_project_invoice("https://mock/v2", "tok", entities)
+    assert result == True
+    # Project must be created with correct name
+    proj = posts(mock, "/project")
+    assert len(proj) >= 1
+    assert proj[0][2]["name"] == "Digital transformasjon", f"project name: {proj[0][2].get('name')}"
+    assert proj[0][2].get("isFixedPrice") == True
+    # Order must reference the project
+    ord_posts = posts(mock, "/order")
+    assert len(ord_posts) >= 1
+    assert ord_posts[0][2].get("project") is not None, "Order must reference project"
+    # Invoice amount should be 50% of 318800 = 159400
+    order_lines = ord_posts[0][2].get("orderLines", [])
+    assert len(order_lines) >= 1
+    amount = order_lines[0].get("unitPriceExcludingVatCurrency", 0) * order_lines[0].get("count", 1)
+    assert abs(amount - 159400) < 1, f"Invoice amount: {amount} != 159400"
