@@ -62,7 +62,8 @@ SYSTEM_PROMPT = """You are an expert accounting AI that parses task prompts into
 Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk, German, French), extract:
 
 {
-  "task_type": "one of: create_employee, create_customer, create_supplier, create_product, create_department, create_project, create_invoice, create_travel_expense, delete_travel_expense, register_payment, register_supplier_invoice, run_payroll, create_credit_note, update_employee, update_customer, create_contact, create_order, invoice_with_payment, reverse_voucher, delete_entity, bank_reconciliation, unknown",
+  "task_type": "one of: create_employee, create_customer, create_supplier, create_product, create_department, create_project, create_invoice, create_travel_expense, delete_travel_expense, register_payment, register_supplier_invoice, run_payroll, create_credit_note, update_employee, update_customer, create_contact, create_order, invoice_with_payment, project_invoice, reverse_voucher, delete_entity, bank_reconciliation, unknown",
+  // Use 'project_invoice' when the task involves registering hours on a project AND generating an invoice based on those hours
   "entities": {
     // ALL relevant data extracted from the prompt
     // Names: firstName, lastName (split properly)
@@ -162,7 +163,9 @@ def regex_parse(prompt):
         expenses = []
         for m in re.finditer(r'([\wæøåäöü]+(?:\s+[\wæøåäöü]+)?)\s+(\d[\d\s]*)\s*kr', p, re.I):
             desc = m.group(1).strip()
-            if desc.lower() not in ('på', 'er', 'med', 'og', 'av', 'for', 'dagsats', 'dager'):
+            # Strip conjunctions from start
+        desc = re.sub(r'^(?:og|and|und|et|y|e)\s+', '', desc, flags=re.I)
+        if desc.lower() not in ('på', 'er', 'med', 'og', 'av', 'for', 'dagsats', 'dager'):
                 expenses.append({"description": desc, "amount": float(m.group(2).replace(' ', ''))})
         diet = {}
         diet_match = re.search(r'diett\s*\(dagsats\s+(\d+)\s*kr\)', p, re.I)
@@ -1308,6 +1311,127 @@ def handle_reverse_voucher(base_url, token, e):
     return st in (200, 201)
 
 
+def handle_project_invoice(base_url, token, e):
+    """Tier 2: Register hours on a project and generate a project invoice."""
+    today = str(date.today())
+
+    # Step 1: Create customer
+    cust_name = e.get("customerName")
+    cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
+    customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
+
+    # Step 2: Create employee (the person who worked the hours)
+    emp_name = e.get("employeeName")
+    emp_email = e.get("employeeEmail")
+    emp_id = get_or_create_employee(base_url, token, name=emp_name, email=emp_email)
+
+    # Step 3: Create project
+    proj_name = e.get("projectName", "Project")
+    proj_body = {
+        "name": proj_name,
+        "startDate": today,
+    }
+    if customer_id:
+        proj_body["customer"] = {"id": customer_id}
+    if emp_id:
+        proj_body["projectManager"] = {"id": emp_id}
+    st, proj_resp = tx_post(base_url, token, "/project", proj_body)
+    proj_id = proj_resp.get("value", {}).get("id")
+    print(f"create project: {st} id={proj_id}")
+
+    # Step 4: Find or create activity
+    activity_name = e.get("activityName") or e.get("activity", "Arbeid")
+    # Try to find existing activity first
+    _, act_list = tx_get(base_url, token, "/activity", {"name": activity_name, "count": 1})
+    acts = act_list.get("values", [])
+    act_id = acts[0]["id"] if acts else None
+    if not act_id:
+        # Try creating with activityType
+        act_body = {"name": activity_name, "activityType": "PROJECT_SPECIFIC_ACTIVITY"}
+        st_act, act_resp = tx_post(base_url, token, "/activity", act_body)
+        act_id = act_resp.get("value", {}).get("id")
+        print(f"create activity: {st_act} id={act_id}")
+    if not act_id:
+        # Fall back to "Fakturerbart arbeid" or first available
+        _, all_acts = tx_get(base_url, token, "/activity", {"count": 10})
+        for a in all_acts.get("values", []):
+            if "faktur" in a.get("name", "").lower() or "arbeid" in a.get("name", "").lower():
+                act_id = a["id"]; break
+        if not act_id and all_acts.get("values"):
+            act_id = all_acts["values"][0]["id"]
+    print(f"activity: id={act_id}")
+
+    # Step 5: Register timesheet hours
+    hours = float(e.get("hours") or e.get("count") or 0)
+    hourly_rate = float(e.get("hourlyRate") or e.get("rate") or 0)
+    # Try to extract from lines if not set directly
+    lines = e.get("lines", [])
+    if not hours and lines:
+        hours = float(lines[0].get("count") or lines[0].get("hours") or 0)
+    if not hourly_rate and lines:
+        hourly_rate = float(lines[0].get("unitPrice") or lines[0].get("rate") or 0)
+    if emp_id and hours > 0:
+        ts_body = {
+            "employee": {"id": emp_id},
+            "date": today,
+            "hours": hours,
+        }
+        if proj_id:
+            ts_body["project"] = {"id": proj_id}
+        if act_id:
+            ts_body["activity"] = {"id": act_id}
+        st_ts, ts_resp = tx_post(base_url, token, "/timesheet/entry", ts_body)
+        print(f"timesheet entry: {st_ts} {str(ts_resp)[:200]}")
+
+    # Step 6: Set hourly cost/rate on employee for the project
+    if emp_id and hourly_rate > 0:
+        hr_body = {
+            "employee": {"id": emp_id},
+            "date": today,
+            "rate": hourly_rate,
+            "costRate": hourly_rate,
+        }
+        if proj_id:
+            hr_body["project"] = {"id": proj_id}
+        if act_id:
+            hr_body["activity"] = {"id": act_id}
+        st_hr, hr_resp = tx_post(base_url, token, "/employee/hourlyCostAndRate", hr_body)
+        print(f"hourly rate: {st_hr} {str(hr_resp)[:150]}")
+
+    # Step 7: Create invoice based on hours
+    ensure_bank_account(base_url, token)
+    total_amount = hours * hourly_rate if hours and hourly_rate else float(e.get("totalAmount", 0))
+    desc = f"{activity_name} - {proj_name}" if activity_name else proj_name
+
+    order_lines = [{
+        "description": desc,
+        "unitPriceExcludingVatCurrency": hourly_rate or total_amount,
+        "count": hours or 1.0,
+    }]
+
+    order_body = {
+        "customer": {"id": customer_id} if customer_id else None,
+        "orderDate": today,
+        "deliveryDate": today,
+        "orderLines": order_lines,
+    }
+    if order_body.get("customer") is None:
+        order_body.pop("customer", None)
+    if proj_id:
+        order_body["project"] = {"id": proj_id}
+
+    st_ord, ord_resp = tx_post(base_url, token, "/order", order_body)
+    order_id = ord_resp.get("value", {}).get("id")
+    print(f"create order: {st_ord} id={order_id}")
+
+    if order_id:
+        st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
+                                   params={"invoiceDate": today, "sendToCustomer": "false"})
+        print(f"order->invoice: {st_inv} {str(inv_resp)[:200]}")
+
+    return True
+
+
 def handle_delete_entity(base_url, token, e):
     """Generic delete handler for various entity types."""
     entity_type = e.get("entityType", "").lower()
@@ -1366,6 +1490,9 @@ HANDLERS = {
     "invoice_with_payment": handle_invoice_with_payment,
     "reverse_voucher": handle_reverse_voucher,
     "delete_entity": handle_delete_entity,
+    "project_invoice": handle_project_invoice,
+    "register_hours_and_invoice": handle_project_invoice,
+    "timesheet_and_invoice": handle_project_invoice,
     # Aliases for LLM variations
     "create_and_send_invoice": handle_create_invoice,
     "send_invoice": handle_create_invoice,
