@@ -605,30 +605,25 @@ def handle_create_customer(base_url, token, e):
 
 def handle_create_supplier(base_url, token, e):
     body = {"name": e.get("name") or e.get("supplierName", "Supplier"), "isSupplier": True}
-    email = e.get("email") or e.get("supplierEmail") or e.get("invoiceEmail")
+    email = e.get("email") or e.get("supplierEmail")
     if email:
         body["email"] = email
-        body["invoiceEmail"] = email  # where supplier sends their invoices to us
+        body["invoiceEmail"] = email
     org = e.get("organizationNumber") or e.get("supplierOrgNumber") or e.get("orgNumber")
-    if org:
-        body["organizationNumber"] = str(org)
-    phone = e.get("phoneNumber") or e.get("phone") or e.get("mobile") or e.get("mobilePhone")
-    if phone:
-        body["phoneNumber"] = str(phone)
+    if org: body["organizationNumber"] = org
+    if "phone" in e or "phoneNumber" in e:
+        body["phoneNumber"] = e.get("phone") or e.get("phoneNumber")
 
-    # Always set postalAddress — scorer checks it even for minimal prompts
-    addr = e.get("address") or e.get("physicalAddress") or e.get("postalAddress") or {}
-    if isinstance(addr, str):
-        addr = {"addressLine1": addr}
-    body["postalAddress"] = {
-        "addressLine1": addr.get("street") or addr.get("addressLine1") or "",
-        "postalCode": addr.get("postalCode") or addr.get("zip") or "",
-        "city": addr.get("city") or "",
-        "country": {"id": int(addr.get("countryId") or 161)},  # 161 = Norway
-    }
-    # physicalAddress mirrors postalAddress when not separately specified
-    if e.get("physicalAddress") or addr.get("addressLine1"):
-        body["physicalAddress"] = body["postalAddress"]
+    addr = e.get("address") or e.get("physicalAddress") or {}
+    if addr:
+        addr_obj = {
+            "addressLine1": addr.get("street") or addr.get("addressLine1", ""),
+            "postalCode": addr.get("postalCode", ""),
+            "city": addr.get("city", ""),
+            "country": {"id": 161},
+        }
+        body["physicalAddress"] = addr_obj
+        body["postalAddress"] = addr_obj
 
     st, resp = tx_post(base_url, token, "/supplier", body)
     print(f"create_supplier: {st} {str(resp)[:200]}")
@@ -1130,10 +1125,12 @@ def handle_run_payroll(base_url, token, e):
         emp_body = {
             "employee": {"id": emp_id},
             "startDate": "2024-01-01",
+            "employmentType": "ORDINARY",
+            "remunerationType": "MONTHLY_WAGE",
         }
         st_e, resp_e = tx_post(base_url, token, "/employee/employment", emp_body)
         employment_id = resp_e.get("value", {}).get("id")
-        print(f"create employment: {st_e} id={employment_id}")
+        print(f"create employment: {st_e} id={employment_id} {str(resp_e)[:150] if st_e != 201 else ''}")
 
         # Add employment details with salary
         if employment_id and base_salary > 0:
@@ -1143,7 +1140,7 @@ def handle_run_payroll(base_url, token, e):
                 "salary": round(base_salary, 2),
             }
             st_d, resp_d = tx_post(base_url, token, "/employee/employment/details", det_body)
-            print(f"employment details: {st_d}")
+            print(f"employment details: {st_d} {str(resp_d)[:150] if st_d != 201 else ''}")
     else:
         print(f"employment exists: id={existing_employment[0]['id']}")
 
@@ -1463,6 +1460,63 @@ def handle_reverse_voucher(base_url, token, e):
     return st in (200, 201)
 
 
+def handle_bank_reconciliation(base_url, token, e):
+    """Bank reconciliation: match bank statement entries to ledger/payments."""
+    today = str(date.today())
+
+    # Step 1: Get bank accounts
+    _, ba_resp = tx_get(base_url, token, "/bank/statement", {"count": 10})
+    statements = ba_resp.get("values", [])
+
+    # Step 2: Get the bank account from entity or use first available
+    account_number = e.get("accountNumber") or e.get("bankAccountNumber")
+    _, acc_resp = tx_get(base_url, token, "/bankAccount", {"count": 10})
+    bank_accounts = acc_resp.get("values", [])
+    bank_acct_id = None
+    if bank_accounts:
+        if account_number:
+            for ba in bank_accounts:
+                if str(ba.get("number", "")) == str(account_number):
+                    bank_acct_id = ba["id"]
+                    break
+        if not bank_acct_id:
+            bank_acct_id = bank_accounts[0]["id"]
+
+    # Step 3: Get open ledger postings (unmatch items) on account 1920
+    ledger_acct_id = None
+    _, lac = tx_get(base_url, token, "/ledger/account", {"number": 1920, "fields": "id", "count": 1})
+    if lac.get("values"):
+        ledger_acct_id = lac["values"][0]["id"]
+
+    # Step 4: Get bank reconciliation entries and match them
+    if bank_acct_id:
+        _, rec_resp = tx_get(base_url, token, "/bank/reconciliation",
+                             {"bankAccountId": bank_acct_id, "count": 5})
+        reconciliations = rec_resp.get("values", [])
+        if not reconciliations:
+            # Create a reconciliation for today
+            rec_body = {
+                "bankAccount": {"id": bank_acct_id},
+                "closingDate": e.get("date") or today,
+                "closingBalance": float(e.get("closingBalance") or e.get("balance") or 0),
+            }
+            st_rc, rc_resp = tx_post(base_url, token, "/bank/reconciliation", rec_body)
+            print(f"create reconciliation: {st_rc}")
+            rec_id = rc_resp.get("value", {}).get("id")
+        else:
+            rec_id = reconciliations[0]["id"]
+            print(f"reconciliation exists: id={rec_id}")
+
+        if rec_id:
+            # Match all unmatched entries
+            _, match_resp = tx_put(base_url, token, f"/bank/reconciliation/{rec_id}/:match", {})
+            print(f"match: {match_resp}")
+            return True
+
+    print("bank_reconciliation: no bank account found")
+    return False
+
+
 def handle_project_invoice(base_url, token, e):
     """Tier 2: Register hours on a project and generate a project invoice."""
     today = str(date.today())
@@ -1731,6 +1785,9 @@ HANDLERS = {
     "invoice_with_payment": handle_invoice_with_payment,
     "reverse_voucher": handle_reverse_voucher,
     "delete_entity": handle_delete_entity,
+    "bank_reconciliation": handle_bank_reconciliation,
+    "reconcile_bank": handle_bank_reconciliation,
+    "bank_statement": handle_bank_reconciliation,
     "project_invoice": handle_project_invoice,
     "create_accounting_dimension": handle_create_accounting_dimension,
     "accounting_dimension": handle_create_accounting_dimension,
