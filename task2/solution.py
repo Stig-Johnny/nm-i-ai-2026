@@ -616,12 +616,14 @@ def handle_create_supplier(base_url, token, e):
 
     addr = e.get("address") or e.get("physicalAddress") or {}
     if addr:
-        body["physicalAddress"] = {
+        addr_obj = {
             "addressLine1": addr.get("street") or addr.get("addressLine1", ""),
             "postalCode": addr.get("postalCode", ""),
             "city": addr.get("city", ""),
             "country": {"id": 161},
         }
+        body["physicalAddress"] = addr_obj
+        body["postalAddress"] = addr_obj
 
     st, resp = tx_post(base_url, token, "/supplier", body)
     print(f"create_supplier: {st} {str(resp)[:200]}")
@@ -1123,10 +1125,12 @@ def handle_run_payroll(base_url, token, e):
         emp_body = {
             "employee": {"id": emp_id},
             "startDate": "2024-01-01",
+            "employmentType": "ORDINARY",
+            "remunerationType": "MONTHLY_WAGE",
         }
         st_e, resp_e = tx_post(base_url, token, "/employee/employment", emp_body)
         employment_id = resp_e.get("value", {}).get("id")
-        print(f"create employment: {st_e} id={employment_id}")
+        print(f"create employment: {st_e} id={employment_id} {str(resp_e)[:150] if st_e != 201 else ''}")
 
         # Add employment details with salary
         if employment_id and base_salary > 0:
@@ -1136,7 +1140,7 @@ def handle_run_payroll(base_url, token, e):
                 "salary": round(base_salary, 2),
             }
             st_d, resp_d = tx_post(base_url, token, "/employee/employment/details", det_body)
-            print(f"employment details: {st_d}")
+            print(f"employment details: {st_d} {str(resp_d)[:150] if st_d != 201 else ''}")
     else:
         print(f"employment exists: id={existing_employment[0]['id']}")
 
