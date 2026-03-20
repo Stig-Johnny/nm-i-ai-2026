@@ -677,10 +677,11 @@ def handle_create_department(base_url, token, e):
 def handle_create_project(base_url, token, e):
     today = str(date.today())
 
-    # Find or create customer
+    # Find or create customer — check all name/org variants
+    cust_name = e.get("customerName") or e.get("customer") or e.get("name")
+    cust_org = (e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
+                or e.get("organizationNumber"))  # normalizer stores it here
     customer_id = None
-    cust_name = e.get("customerName") or e.get("customer")
-    cust_org = e.get("customerOrgNumber") or e.get("customerOrganizationNumber")
     if cust_org or cust_name:
         customer_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
 
@@ -688,24 +689,40 @@ def handle_create_project(base_url, token, e):
     pm_id = None
     pm = e.get("projectManager") or {}
     pm_name = e.get("projectManagerName") or pm.get("name")
-    pm_first = e.get("projectManagerFirstName") or pm.get("firstName") or (pm_name.split()[0] if pm_name else None)
     pm_email = e.get("projectManagerEmail") or pm.get("email")
 
-    if pm_first or pm_email:
-        pm_id = get_or_create_employee(base_url, token, name=pm_name or pm_first, email=pm_email)
+    if pm_name or pm_email:
+        pm_id = get_or_create_employee(base_url, token, name=pm_name, email=pm_email)
 
     if not pm_id:
-        st, resp = tx_get(base_url, token, "/employee", {"fields": "id", "count": 1})
-        vals = resp.get("values", [])
-        if vals: pm_id = vals[0]["id"]
+        # Fallback: use any existing employee
+        _, emp_resp = tx_get(base_url, token, "/employee", {"fields": "id", "count": 1})
+        vals = emp_resp.get("values", [])
+        if vals:
+            pm_id = vals[0]["id"]
 
+    if not pm_id:
+        # No employees in sandbox — create a placeholder PM (required by Tripletex)
+        pm_id = get_or_create_employee(base_url, token,
+                                        name="Project Manager",
+                                        email="pm@company.no")
+
+    proj_name = e.get("projectName") or e.get("name") or "Project"
     body = {
-        "name": e.get("name") or e.get("projectName", "Project"),
-        "startDate": e.get("startDate", today),
+        "name": proj_name,
+        "startDate": e.get("startDate") or today,
     }
-    if customer_id: body["customer"] = {"id": customer_id}
-    if pm_id: body["projectManager"] = {"id": pm_id}
-    if e.get("endDate"): body["endDate"] = e["endDate"]
+    if customer_id:
+        body["customer"] = {"id": customer_id}
+    if pm_id:
+        body["projectManager"] = {"id": pm_id}
+    if e.get("endDate"):
+        body["endDate"] = e["endDate"]
+    fixed_price = e.get("fixedPrice") or e.get("fixedprice")
+    if fixed_price:
+        body["fixedprice"] = float(fixed_price)
+    if e.get("budget"):
+        body["budget"] = float(e["budget"])
 
     st, resp = tx_post(base_url, token, "/project", body)
     print(f"create_project: {st} {str(resp)[:200]}")
