@@ -560,17 +560,31 @@ def main():
                         print(f"Error fetching round detail: {e}")
                         continue
 
-                    # KEY INSIGHT (empirically confirmed R1-R4):
-                    # GT is the expected distribution over stochastic simulation runs.
-                    # Our calibrated priors ARE that expected distribution.
-                    # Any single observation = one sample = adds noise = higher KL.
-                    # Pure priors beat priors+observations in 14/15 historical cases.
-                    # Optimal strategy: submit priors only, do NOT use query budget.
-                    print("Submitting calibrated priors (no queries — pure prior is optimal)...")
-                    try:
-                        solve_with_priors(s, r["id"], detail)
-                    except Exception as e:
-                        print(f"solve_with_priors error: {e}")
+                    # STRATEGY (R8+): MC + Parameter Inference
+                    # - 27 queries on seed 0 (3 full-map passes) → infer expansion/conflict params
+                    # - Apply inferred params to adjust priors for ALL 5 seeds
+                    # - 23 remaining queries for MC refinement on seeds 1-4
+                    # Empirically: MC+inference beats pure priors by ~6+ pts per round
+                    # Pure prior is fallback if MC solver fails
+                    budget = get_budget(s)
+                    queries_used = budget.get("queries_used", 0)
+                    if queries_used < 5:  # Fresh round — use MC+inference
+                        print("Running MC+inference solver (parameter estimation)...")
+                        try:
+                            from task3.solver_mc import solve_with_mc_inference
+                            solve_with_mc_inference(s, r["id"], detail)
+                        except Exception as e:
+                            print(f"MC solver error: {e} — falling back to pure priors")
+                            try:
+                                solve_with_priors(s, r["id"], detail)
+                            except Exception as e2:
+                                print(f"solve_with_priors fallback error: {e2}")
+                    else:
+                        print(f"Round already has {queries_used} queries — submitting calibrated priors only...")
+                        try:
+                            solve_with_priors(s, r["id"], detail)
+                        except Exception as e:
+                            print(f"solve_with_priors error: {e}")
 
             time.sleep(30)
             print(".", end="", flush=True)
