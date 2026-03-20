@@ -516,3 +516,27 @@ def test_C08_project_fixed_price_invoice():
     assert len(order_lines) >= 1
     amount = order_lines[0].get("unitPriceExcludingVatCurrency", 0) * order_lines[0].get("count", 1)
     assert abs(amount - 152250) < 1, f"Invoice amount should be 152250, got {amount}"
+
+
+def test_C09_create_product_alt_keys():
+    """Competition 15:05: Product with productName/netPrice keys (scored 0/7)"""
+    from task2.solution import handle_create_product
+    mock = APIMock()
+    entities = {
+        "productName": "Cloud-Speicher",
+        "productNumber": "9235",
+        "netPrice": 28800,
+        "vatRate": 25,
+        "priceWithVat": 36000,
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post):
+        result = handle_create_product("https://mock/v2", "tok", entities)
+    assert result == True
+    p = posts(mock, "/product")
+    assert len(p) == 1
+    b = p[0][2]
+    assert b["name"] == "Cloud-Speicher", f"name: {b.get('name')}"
+    assert b["number"] == "9235"
+    assert b["priceExcludingVatCurrency"] == 28800.0
+    assert b["vatType"]["id"] == 3  # 25%
