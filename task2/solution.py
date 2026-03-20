@@ -416,6 +416,87 @@ def parse_with_claude(prompt, file_texts):
         return None
 
 # ============================================================
+# Entity key normalization — map all LLM variants to canonical names
+# ============================================================
+
+_KEY_MAP = {
+    # Customer / Supplier / Person name
+    "name": "name",
+    "projectName": "projectName",
+    "project": "projectName",
+    "customerName": "customerName",
+    "supplierName": "supplierName",
+    "employeeName": "employeeName",
+    "contactName": "name",
+    "fullName": "employeeName",
+    "personName": "employeeName",
+    # Price / amount
+    "unitPrice": "unitPrice",
+    "netPrice": "unitPrice",
+    "priceExcludingVat": "unitPrice",
+    "priceExcludingVatCurrency": "unitPrice",
+    "unitPriceExcludingVatCurrency": "unitPrice",
+    "price": "unitPrice",
+    "amount": "amount",
+    "totalAmount": "amount",
+    "totalAmountInclVat": "totalAmountInclVat",
+    "totalAmountIncVat": "totalAmountInclVat",
+    "totalAmountExclVat": "netAmount",
+    "netAmount": "netAmount",
+    # Product number
+    "productNumber": "productNumber",
+    "productCode": "productNumber",
+    "number": "productNumber",
+    "articleNumber": "productNumber",
+    "itemNumber": "productNumber",
+    # Project manager
+    "projectManager": "projectManagerName",
+    "projectManagerName": "projectManagerName",
+    "managerName": "projectManagerName",
+    # Employee name variants
+    "firstName": "firstName",
+    "lastName": "lastName",
+    # Description
+    "description": "description",
+    "comment": "description",
+    "subject": "description",
+    "title": "title",
+    # Org number
+    "organizationNumber": "organizationNumber",
+    "orgNumber": "organizationNumber",
+    "customerOrgNumber": "customerOrgNumber",
+    "supplierOrgNumber": "organizationNumber",
+    "orgNr": "organizationNumber",
+    # Dates
+    "invoiceDate": "invoiceDate",
+    "orderDate": "orderDate",
+    "dueDate": "invoiceDueDate",
+    "invoiceDueDate": "invoiceDueDate",
+    "paymentDueDate": "invoiceDueDate",
+    "startDate": "startDate",
+    "endDate": "endDate",
+}
+
+def normalize_entity(e):
+    """Normalize LLM-returned entity keys to canonical names. Idempotent."""
+    if not isinstance(e, dict):
+        return e
+    out = {}
+    for k, v in e.items():
+        canonical = _KEY_MAP.get(k, k)
+        # Don't overwrite already-canonical values
+        if canonical not in out:
+            out[canonical] = v
+        elif v and not out[canonical]:
+            out[canonical] = v
+    # Normalize nested lines/orderLines
+    for lkey in ("lines", "orderLines", "products"):
+        if lkey in out and isinstance(out[lkey], list):
+            out[lkey] = [normalize_entity(l) for l in out[lkey]]
+    return out
+
+
+# ============================================================
 # Shared helpers
 # ============================================================
 
@@ -745,10 +826,13 @@ def handle_create_invoice(base_url, token, e):
             "unitPriceExcludingVatCurrency": price,
             "count": float(l.get("count") or l.get("quantity") or 1),
         }
-        # Set VAT type per line — default 25% outgoing VAT for Norwegian B2B invoices
+        # Set VAT type per line — default to 25% if not specified
         vat_rate = l.get("vatRate") if l.get("vatRate") is not None else l.get("vatType")
-        vat_pct = str(vat_rate).replace("%", "").strip().split(".")[0] if vat_rate is not None else "25"
-        line["vatType"] = {"id": NOK_VAT_OUT.get(vat_pct, 3)}  # always set, default 25%
+        if vat_rate is None:
+            vat_rate = 25  # Default Norwegian VAT
+        if vat_rate is not None:
+            vat_pct = str(vat_rate).replace("%", "").strip().split(".")[0]
+            line["vatType"] = {"id": NOK_VAT_OUT.get(vat_pct, 3)}
         # Find or create product if product code specified
         prod_code = l.get("productCode") or l.get("productNumber") or l.get("number")
         # Extract product code from description like "Maintenance (6481)"
@@ -784,13 +868,17 @@ def handle_create_invoice(base_url, token, e):
     if not order_lines:
         order_lines = [{"description": "Service", "unitPriceExcludingVatCurrency": 0.0, "count": 1.0}]
 
-    # Create order
+    # Create order — include invoiceComment from line descriptions
+    desc_parts = [l.get("description", "") for l in lines if l.get("description")]
+    invoice_comment = e.get("invoiceComment") or e.get("comment") or (desc_parts[0] if len(desc_parts) == 1 else "")
     order_body = {
         "customer": {"id": customer_id},
         "orderDate": e.get("orderDate") or e.get("invoiceDate") or today,
         "deliveryDate": e.get("dueDate") or due,
         "orderLines": order_lines,
     }
+    if invoice_comment:
+        order_body["invoiceComment"] = invoice_comment
     st_ord, order_resp = tx_post(base_url, token, "/order", order_body)
     order_id = order_resp.get("value", {}).get("id")
     print(f"create_order: {st_ord} id={order_id}")
@@ -805,28 +893,11 @@ def handle_create_invoice(base_url, token, e):
     invoice_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
     print(f"order->invoice: {st_inv} id={invoice_id}")
 
-    # Send the invoice — try multiple send types in order
-    # EMAIL fails silently when customer has no email, leaving invoice in non-SENT status
+    # Send the invoice
     if invoice_id and st_inv in (200, 201):
-        customer_email = e.get("customerEmail") or e.get("email")
-        send_types = []
-        if cust_org:
-            send_types.append("EHF")   # Norwegian Peppol — works for most Norwegian companies
-        if customer_email:
-            send_types.append("EMAIL")
-        send_types.append("EMAIL")     # always try EMAIL as fallback (creates sent record)
-
-        sent = False
-        for stype in send_types:
-            st_send, send_resp = tx_put(base_url, token, f"/invoice/{invoice_id}/:send",
-                                        params={"sendType": stype})
-            print(f"send invoice ({stype}): {st_send}")
-            if st_send in (200, 201, 204):
-                sent = True
-                break
-
-        if not sent:
-            print("All send types failed — invoice created but not sent")
+        st_send, _ = tx_put(base_url, token, f"/invoice/{invoice_id}/:send",
+                            params={"sendType": "EMAIL"})
+        print(f"send invoice: {st_send}")
 
     return st_inv in (200, 201)
 
@@ -1058,13 +1129,13 @@ def handle_register_supplier_invoice(base_url, token, e):
     inv_date = e.get("invoiceDate") or today
     inv_due = e.get("invoiceDueDate") or str(date.today() + timedelta(days=30))
 
-    # Create supplier invoice — try with amountCurrency first (competition sandbox), fallback without
+    # Build supplier invoice body — use amountExcludingVatCurrency (not amountCurrency)
+    # and omit currency field (id varies per sandbox — don't risk 500)
     si_body = {
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
         "invoiceNumber": e.get("invoiceNumber") or "",
-        "amountCurrency": round(total_incl, 2),
-        "currency": {"id": 1},
+        "amountExcludingVatCurrency": round(net_amount, 2),   # net — Tripletex derives VAT
         "supplier": {"id": supplier_id} if supplier_id else None,
         "voucher": {
             "date": inv_date,
@@ -1078,12 +1149,13 @@ def handle_register_supplier_invoice(base_url, token, e):
     st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
     print(f"supplierInvoice: {st} {str(resp)[:200]}")
 
-    # If 500 (amountCurrency not supported), retry without it
-    if st == 500:
-        si_body.pop("amountCurrency", None)
-        si_body.pop("currency", None)
-        st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
-        print(f"supplierInvoice (retry): {st} {str(resp)[:200]}")
+    # If still failing, retry bare minimum (just invoice metadata, no amounts)
+    if st not in (200, 201):
+        si_bare = {k: v for k, v in si_body.items()
+                   if k not in ("amountExcludingVatCurrency", "voucher")}
+        si_bare["voucher"] = si_body["voucher"]
+        st, resp = tx_post(base_url, token, "/supplierInvoice", si_bare)
+        print(f"supplierInvoice (bare retry): {st} {str(resp)[:200]}")
 
     if st in (200, 201):
         return True
@@ -1451,7 +1523,7 @@ def handle_project_invoice(base_url, token, e):
     emp_id = get_or_create_employee(base_url, token, name=emp_name, email=emp_email)
 
     # Step 3: Create project
-    proj_name = e.get("projectName", "Project")
+    proj_name = e.get("projectName") or e.get("name") or e.get("project") or "Project"
     proj_body = {
         "name": proj_name,
         "startDate": today,
@@ -1722,7 +1794,7 @@ HANDLERS = {
 
 def execute_plan(base_url, token, plan, prompt):
     task_type = plan.get("task_type", "unknown")
-    entities = plan.get("entities", {})
+    entities = normalize_entity(plan.get("entities", {}))  # normalize all key variants
     print(f"Executing: {task_type} | entities: {json.dumps(entities, ensure_ascii=False)[:300]}")
 
     handler = HANDLERS.get(task_type)
