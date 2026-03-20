@@ -799,11 +799,19 @@ def handle_create_invoice(base_url, token, e):
         print(f"order failed: {str(order_resp)[:200]}")
         return False
 
-    # Convert order to invoice
+    # Convert order to invoice and send
     inv_date = e.get("invoiceDate") or e.get("orderDate") or today
     st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
                                params={"invoiceDate": inv_date, "sendToCustomer": "false"})
-    print(f"order->invoice: {st_inv} {str(inv_resp)[:200]}")
+    invoice_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
+    print(f"order->invoice: {st_inv} id={invoice_id}")
+
+    # Send the invoice
+    if invoice_id and st_inv in (200, 201):
+        st_send, _ = tx_put(base_url, token, f"/invoice/{invoice_id}/:send",
+                            params={"sendType": "EMAIL"})
+        print(f"send invoice: {st_send}")
+
     return st_inv in (200, 201)
 
 
@@ -879,17 +887,17 @@ def handle_create_travel_expense(base_url, token, e):
         if not amt:
             continue
 
-        if "fly" in desc or "flight" in desc or "billett" in desc:
+        if any(kw in desc for kw in ["fly", "flight", "flug", "billett", "avión", "avion", "voo", "vol "]):
             cat_id = find_cat("fly", "flybillett", "flight")
         elif "taxi" in desc:
             cat_id = find_cat("taxi")
-        elif "hotell" in desc or "hotel" in desc:
+        elif any(kw in desc for kw in ["hotell", "hotel", "alojamiento", "hébergement", "hospedagem"]):
             cat_id = find_cat("hotell", "hotel")
-        elif "diett" in desc or "diet" in desc or "kost" in desc:
+        elif any(kw in desc for kw in ["diett", "diet", "kost", "diät", "dieta"]):
             cat_id = find_cat("diett", "kost", "mat")
-        elif "tog" in desc or "train" in desc:
+        elif any(kw in desc for kw in ["tog", "train", "zug", "tren", "comboio"]):
             cat_id = find_cat("tog", "train")
-        elif "buss" in desc or "bus" in desc:
+        elif any(kw in desc for kw in ["buss", "bus", "ônibus", "autobús"]):
             cat_id = find_cat("buss", "kollektiv", "bus")
         else:
             cat_id = find_cat("annen", "annet", "other")
