@@ -537,3 +537,36 @@ def test_C09_create_product_alt_keys():
     assert b["number"] == "9235"
     assert b["priceExcludingVatCurrency"] == 28800.0
     assert b["vatType"]["id"] == 3  # 25%
+
+
+def test_C10_invoice_product_code_in_description():
+    """Competition 15:48: Product codes embedded in description (scored 5/8).
+    LLM sometimes returns 'Maintenance (6481)' instead of separate productNumber."""
+    from task2.solution import handle_create_invoice
+    mock = APIMock()
+    # Simulate LLM returning codes in description (no productNumber)
+    entities = {
+        "customerName": "Rivière SARL",
+        "customerOrgNumber": "909579791",
+        "lines": [
+            {"description": "Maintenance (6481)", "unitPrice": 28100, "count": 1, "vatRate": 25},
+            {"description": "Design web (2618)", "unitPrice": 12600, "count": 1, "vatRate": 15},
+            {"description": "Développement système (8754)", "unitPrice": 1800, "count": 1, "vatRate": 0},
+        ],
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        result = handle_create_invoice("https://mock/v2", "tok", entities)
+    assert result == True
+    # Products should be created from extracted codes
+    prod_posts = posts(mock, "/product")
+    assert len(prod_posts) == 3, f"Expected 3 products from description codes, got {len(prod_posts)}"
+    prod_numbers = [p[2].get("number") for p in prod_posts]
+    assert "6481" in prod_numbers
+    assert "2618" in prod_numbers
+    assert "8754" in prod_numbers
+    # Descriptions should be cleaned (no code in parens)
+    ord_posts = posts(mock, "/order")
+    descs = [ol.get("description", "") for ol in ord_posts[0][2].get("orderLines", [])]
+    assert all("(" not in d for d in descs), f"Descriptions still have codes: {descs}"

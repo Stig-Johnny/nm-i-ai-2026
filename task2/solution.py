@@ -747,7 +747,15 @@ def handle_create_invoice(base_url, token, e):
             vat_pct = str(vat_rate).replace("%", "").strip().split(".")[0]
             line["vatType"] = {"id": NOK_VAT_OUT.get(vat_pct, 3)}
         # Find or create product if product code specified
-        prod_code = l.get("productCode") or l.get("productNumber")
+        prod_code = l.get("productCode") or l.get("productNumber") or l.get("number")
+        # Extract product code from description like "Maintenance (6481)"
+        if not prod_code:
+            import re as _re
+            code_match = _re.search(r'\((\d{3,})\)', l.get("description", ""))
+            if code_match:
+                prod_code = code_match.group(1)
+                # Clean the description
+                line["description"] = _re.sub(r'\s*\(\d{3,}\)', '', l.get("description", "")).strip()
         if prod_code:
             # Try to find existing product first
             _, existing = tx_get(base_url, token, "/product", {"number": str(prod_code), "fields": "id", "count": 1})
