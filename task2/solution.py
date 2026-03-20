@@ -745,11 +745,10 @@ def handle_create_invoice(base_url, token, e):
             "unitPriceExcludingVatCurrency": price,
             "count": float(l.get("count") or l.get("quantity") or 1),
         }
-        # Set VAT type per line if specified
+        # Set VAT type per line — default 25% outgoing VAT for Norwegian B2B invoices
         vat_rate = l.get("vatRate") if l.get("vatRate") is not None else l.get("vatType")
-        if vat_rate is not None:
-            vat_pct = str(vat_rate).replace("%", "").strip().split(".")[0]
-            line["vatType"] = {"id": NOK_VAT_OUT.get(vat_pct, 3)}
+        vat_pct = str(vat_rate).replace("%", "").strip().split(".")[0] if vat_rate is not None else "25"
+        line["vatType"] = {"id": NOK_VAT_OUT.get(vat_pct, 3)}  # always set, default 25%
         # Find or create product if product code specified
         prod_code = l.get("productCode") or l.get("productNumber") or l.get("number")
         # Extract product code from description like "Maintenance (6481)"
@@ -806,11 +805,28 @@ def handle_create_invoice(base_url, token, e):
     invoice_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
     print(f"order->invoice: {st_inv} id={invoice_id}")
 
-    # Send the invoice
+    # Send the invoice — try multiple send types in order
+    # EMAIL fails silently when customer has no email, leaving invoice in non-SENT status
     if invoice_id and st_inv in (200, 201):
-        st_send, _ = tx_put(base_url, token, f"/invoice/{invoice_id}/:send",
-                            params={"sendType": "EMAIL"})
-        print(f"send invoice: {st_send}")
+        customer_email = e.get("customerEmail") or e.get("email")
+        send_types = []
+        if cust_org:
+            send_types.append("EHF")   # Norwegian Peppol — works for most Norwegian companies
+        if customer_email:
+            send_types.append("EMAIL")
+        send_types.append("EMAIL")     # always try EMAIL as fallback (creates sent record)
+
+        sent = False
+        for stype in send_types:
+            st_send, send_resp = tx_put(base_url, token, f"/invoice/{invoice_id}/:send",
+                                        params={"sendType": stype})
+            print(f"send invoice ({stype}): {st_send}")
+            if st_send in (200, 201, 204):
+                sent = True
+                break
+
+        if not sent:
+            print("All send types failed — invoice created but not sent")
 
     return st_inv in (200, 201)
 
@@ -1015,8 +1031,9 @@ def handle_register_supplier_invoice(base_url, token, e):
             "date": e.get("invoiceDate") or today,
             "description": e.get("description") or "Leverandorfaktura",
             "account": {"id": expense_acct_id},
-            "amount": round(net_amount, 2),           # net excl VAT
-            "amountGross": round(net_amount, 2),      # same (Tripletex uses amountGross in some versions)
+            "amount": round(net_amount, 2),
+            "amountCurrency": round(net_amount, 2),
+            "amountGross": round(net_amount, 2),
             "amountGrossCurrency": round(net_amount, 2),
             "vatType": {"id": vat_type_id},
         },
@@ -1025,7 +1042,8 @@ def handle_register_supplier_invoice(base_url, token, e):
             "date": e.get("invoiceDate") or today,
             "description": f"Leverandorgjeld {e.get('supplierName', '')}".strip(),
             "account": {"id": payable_acct_id},
-            "amount": round(-total_incl, 2),          # total incl VAT (credit)
+            "amount": round(-total_incl, 2),
+            "amountCurrency": round(-total_incl, 2),
             "amountGross": round(-total_incl, 2),
             "amountGrossCurrency": round(-total_incl, 2),
             "supplier": {"id": supplier_id} if supplier_id else None,
@@ -1040,19 +1058,13 @@ def handle_register_supplier_invoice(base_url, token, e):
     inv_date = e.get("invoiceDate") or today
     inv_due = e.get("invoiceDueDate") or str(date.today() + timedelta(days=30))
 
-    # Try both approaches: /supplierInvoice AND raw voucher
-    # Competition may check either endpoint
-    inv_date = e.get("invoiceDate") or today
-
-    # Approach 1: /supplierInvoice endpoint
-    # CRITICAL: amountCurrency must be set at invoice level — without it postings come out as zero.
-    # Tripletex auto-generates voucher postings from this total; don't rely on postings field alone.
+    # Create supplier invoice — try with amountCurrency first (competition sandbox), fallback without
     si_body = {
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
         "invoiceNumber": e.get("invoiceNumber") or "",
-        "amountCurrency": round(total_incl, 2),  # total incl VAT — drives posting amounts
-        "currency": {"id": 1},  # NOK
+        "amountCurrency": round(total_incl, 2),
+        "currency": {"id": 1},
         "supplier": {"id": supplier_id} if supplier_id else None,
         "voucher": {
             "date": inv_date,
@@ -1066,21 +1078,27 @@ def handle_register_supplier_invoice(base_url, token, e):
     st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
     print(f"supplierInvoice: {st} {str(resp)[:200]}")
 
-    # Approach 2: ALSO create raw voucher with sendToLedger ONLY if supplierInvoice failed.
-    # If supplierInvoice succeeded it already created a voucher — creating another causes 422.
-    if st not in (200, 201):
-        voucher_body = {
-            "date": inv_date,
-            "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
-            "postings": postings,
-        }
-        st2, resp2 = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", voucher_body)
-        print(f"voucher fallback: {st2}")
-    else:
-        st2, resp2 = st, resp
-        print(f"voucher skipped (supplierInvoice succeeded)")
+    # If 500 (amountCurrency not supported), retry without it
+    if st == 500:
+        si_body.pop("amountCurrency", None)
+        si_body.pop("currency", None)
+        st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
+        print(f"supplierInvoice (retry): {st} {str(resp)[:200]}")
 
-    return st in (200, 201) or st2 in (200, 201)
+    if st in (200, 201):
+        return True
+
+    # Fallback: raw voucher only if supplierInvoice failed
+    print("supplierInvoice failed, trying raw voucher")
+    voucher_body = {
+        "date": inv_date,
+        "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
+        "postings": postings,
+    }
+    st2, resp2 = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", voucher_body)
+    print(f"voucher fallback: {st2}")
+
+    return st2 in (200, 201)
 
 
 def handle_run_payroll(base_url, token, e):
