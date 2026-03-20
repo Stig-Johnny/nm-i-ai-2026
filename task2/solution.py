@@ -814,14 +814,31 @@ def handle_create_travel_expense(base_url, token, e):
         print("Failed to find/create employee for travel expense")
         return False
 
-    # Create travel expense
+    # Create travel expense with travel details
     title = e.get("title") or e.get("description") or "Reise"
     travel_days = int(e.get("travelDays") or e.get("days") or (e.get("diet", {}).get("days", 0)) or 1)
+    departure = e.get("departureDate") or e.get("startDate") or e.get("date") or today
+    return_date = e.get("returnDate") or e.get("endDate") or str(date.today() + timedelta(days=max(travel_days - 1, 0)))
+    destination = e.get("destination") or e.get("city") or ""
+    # Extract destination from title if not set (e.g. "Kundebesøk Bergen" → "Bergen")
+    if not destination and title:
+        import re as _re
+        dest_match = _re.search(r'(?:besøk|besök|visit|visite|visita|Besuch)\s+(\w+)', title, _re.I)
+        if dest_match:
+            destination = dest_match.group(1)
+
     te_body = {
         "employee": {"id": emp_id},
         "title": title,
-        "departureDate": e.get("departureDate") or e.get("startDate") or e.get("date") or today,
-        "returnDate": e.get("returnDate") or e.get("endDate") or str(date.today() + timedelta(days=max(travel_days - 1, 0))),
+        "travelDetails": {
+            "departureDate": departure,
+            "returnDate": return_date,
+            "destination": destination,
+            "departureFrom": e.get("departureFrom", ""),
+            "purpose": title,
+            "isForeignTravel": False,
+            "isDayTrip": travel_days <= 1,
+        },
     }
     st, resp = tx_post(base_url, token, "/travelExpense", te_body)
     te_id = resp.get("value", {}).get("id")
@@ -1391,13 +1408,19 @@ def handle_project_invoice(base_url, token, e):
     }
     if customer_id:
         proj_body["customer"] = {"id": customer_id}
+    # PM is required for fixed-price projects — always ensure we have one
+    if not emp_id:
+        _, fallback = tx_get(base_url, token, "/employee", {"fields": "id", "count": 1})
+        fb_vals = fallback.get("values", [])
+        if fb_vals:
+            emp_id = fb_vals[0]["id"]
     if emp_id:
         proj_body["projectManager"] = {"id": emp_id}
     # Set fixed price if applicable
     fixed_price = float(e.get("fixedPrice") or 0)
     if fixed_price:
         proj_body["isFixedPrice"] = True
-        proj_body["fixedPrice"] = fixed_price
+        proj_body["fixedprice"] = fixed_price  # lowercase p — Tripletex API quirk
     st, proj_resp = tx_post(base_url, token, "/project", proj_body)
     proj_id = proj_resp.get("value", {}).get("id")
     print(f"create project: {st} id={proj_id} {str(proj_resp)[:200] if st != 201 else ''}")
