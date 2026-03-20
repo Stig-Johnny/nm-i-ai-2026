@@ -537,7 +537,8 @@ def handle_create_employee(base_url, token, e):
 
     if "firstName" in e: body["firstName"] = e["firstName"]
     if "lastName" in e: body["lastName"] = e["lastName"]
-    if "email" in e: body["email"] = e["email"]
+    emp_email = e.get("email") or e.get("employeeEmail")
+    if emp_email: body["email"] = emp_email
     if e.get("dateOfBirth"): body["dateOfBirth"] = e["dateOfBirth"]
     if e.get("phoneNumberMobile") or e.get("phone") or e.get("phoneNumber"):
         body["phoneNumberMobile"] = e.get("phoneNumberMobile") or e.get("phone") or e.get("phoneNumber")
