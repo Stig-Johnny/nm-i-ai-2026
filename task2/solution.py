@@ -76,7 +76,11 @@ Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk
     // For invoices: customerName, customerOrgNumber, lines [{description, unitPrice, count}]
     // For supplier invoices: supplierName, supplierOrgNumber, invoiceNumber, totalAmountInclVat, netAmount, vatAmount, vatRate, accountNumber
     // For payroll: employeeName, employeeEmail, baseSalary, bonus, totalAmount
-    // For travel expenses: employeeName, employeeEmail, title/description, date, expenses [{description, amount}], diet {dailyRate, days, total}
+    // For travel expenses: employeeName, employeeEmail, title, date, expenses [{description, amount}], diet {dailyRate, days, total}
+    // For products: name, number (product number), priceExcludingVat, vatRate
+    // For projects: name (project name), customerName, customerOrgNumber, projectManagerName, projectManagerEmail, fixedPrice, invoicePercentage
+    // For accounting dimensions: dimensionName, dimensionValues [strings], accountNumber (number), amount, linkedDimensionValue
+    // IMPORTANT: Use these EXACT key names. Do NOT use alternatives like productName, netPrice, unitPrice, account, projectManager (string).
   },
   "steps": ["brief description of API calls needed"]
 }
@@ -950,10 +954,12 @@ def handle_register_supplier_invoice(base_url, token, e):
     # Find inbound VAT account (2710 for 25%)
     vat_acct_id = find_account_id(base_url, token, 2710)
 
-    # Create voucher with balanced postings
-    # Debit: expense account (net amount)
-    # Debit: VAT account (vat amount)
-    # Credit: supplier payable (total incl VAT)
+    # Build postings for supplier invoice
+    # Pattern: expense with vatType (Tripletex auto-calculates VAT) + credit with supplier
+    NOK_VAT_IN = {"25": 1, "15": 11, "12": 12, "0": 0}
+    vat_pct = str(int(vat_rate)).replace("%", "").strip()
+    vat_type_id = NOK_VAT_IN.get(vat_pct, 1)
+
     postings = [
         {
             "row": 1,
@@ -962,41 +968,58 @@ def handle_register_supplier_invoice(base_url, token, e):
             "account": {"id": expense_acct_id},
             "amountGross": round(net_amount, 2),
             "amountGrossCurrency": round(net_amount, 2),
+            "vatType": {"id": vat_type_id},
         },
-    ]
-    if vat_amount > 0 and vat_acct_id:
-        postings.append({
+        {
             "row": 2,
             "date": e.get("invoiceDate") or today,
-            "description": "Inngaende MVA",
-            "account": {"id": vat_acct_id},
-            "amountGross": round(vat_amount, 2),
-            "amountGrossCurrency": round(vat_amount, 2),
-        })
-    postings.append({
-        "row": len(postings) + 1,
-        "date": e.get("invoiceDate") or today,
-        "description": f"Leverandorgjeld {e.get('supplierName', '')}".strip(),
-        "account": {"id": payable_acct_id},
-        "amountGross": round(-total_incl, 2),
-        "amountGrossCurrency": round(-total_incl, 2),
-        "supplier": {"id": supplier_id} if supplier_id else None,
-    })
+            "description": f"Leverandorgjeld {e.get('supplierName', '')}".strip(),
+            "account": {"id": payable_acct_id},
+            "amountGross": round(-total_incl, 2),
+            "amountGrossCurrency": round(-total_incl, 2),
+            "supplier": {"id": supplier_id} if supplier_id else None,
+        },
+    ]
 
     # Remove None supplier refs
     for p in postings:
         if p.get("supplier") is None:
             p.pop("supplier", None)
 
+    inv_date = e.get("invoiceDate") or today
+    inv_due = e.get("invoiceDueDate") or str(date.today() + timedelta(days=30))
+
+    # Try proper /supplierInvoice endpoint first (creates a real supplier invoice)
+    si_body = {
+        "invoiceDate": inv_date,
+        "invoiceDueDate": inv_due,
+        "invoiceNumber": e.get("invoiceNumber") or "",
+        "supplier": {"id": supplier_id} if supplier_id else None,
+        "voucher": {
+            "date": inv_date,
+            "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
+            "postings": postings,
+        },
+    }
+    if si_body.get("supplier") is None:
+        si_body.pop("supplier", None)
+
+    st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
+    print(f"register_supplier_invoice: {st} {str(resp)[:300]}")
+
+    if st in (200, 201):
+        return True
+
+    # Fallback: raw voucher
+    print("supplierInvoice failed, falling back to voucher")
     voucher_body = {
-        "date": e.get("invoiceDate") or today,
+        "date": inv_date,
         "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
         "postings": postings,
     }
-
-    st, resp = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", voucher_body)
-    print(f"register_supplier_invoice voucher: {st} {str(resp)[:300]}")
-    return st in (200, 201)
+    st2, resp2 = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", voucher_body)
+    print(f"voucher fallback: {st2}")
+    return st2 in (200, 201)
 
 
 def handle_run_payroll(base_url, token, e):
@@ -1499,7 +1522,7 @@ def handle_create_accounting_dimension(base_url, token, e):
 
     # Step 3: Post voucher linked to a dimension value (if requested)
     voucher_data = e.get("voucher", {})
-    acct_number = int(e.get("accountNumber") or voucher_data.get("accountNumber") or e.get("account") or 0)
+    acct_number = int(e.get("accountNumber") or voucher_data.get("accountNumber") or voucher_data.get("account") or e.get("account") or 0)
     amount = float(e.get("amount") or voucher_data.get("amount") or 0)
     linked_value = e.get("linkedDimensionValue") or voucher_data.get("linkedDimensionValue") or voucher_data.get("dimensionValue")
 

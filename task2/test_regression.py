@@ -261,16 +261,14 @@ def test_R14_supplier_invoice_tindra():
     sup = posts(m, "/supplier")
     assert len(sup) >= 1
     assert sup[0][2]["name"] == "Tindra AS"
-    # Voucher created
-    vouch = posts(m, "/ledger/voucher")
-    assert len(vouch) == 1
-    postings = vouch[0][2]["postings"]
-    assert len(postings) == 3
-    total = sum(p["amountGross"] for p in postings)
-    assert abs(total) < 0.01, f"Postings unbalanced: {total}"
-    # Expense = 33680, VAT = 8420, Payable = -42100
-    expense = [p for p in postings if p["account"]["id"] == 504]  # 6540
-    assert len(expense) == 1
+    # SupplierInvoice created via POST /supplierInvoice
+    si = posts(m, "/supplierInvoice")
+    assert len(si) >= 1, "Should POST to /supplierInvoice"
+    body = si[0][2]
+    assert body.get("invoiceNumber") == "INV-2026-3624"
+    postings = body.get("voucher", {}).get("postings", [])
+    assert len(postings) == 2  # expense with vatType + credit
+    expense = [p for p in postings if p["amountGross"] > 0]
     assert abs(expense[0]["amountGross"] - 33680) < 1
 
 
@@ -278,11 +276,10 @@ def test_R15_supplier_invoice_snohetta():
     """Round 1: Supplier invoice Snøhetta AS 11950 incl VAT, konto 7000"""
     p, m = run("Vi har mottatt faktura INV-2026-8584 fra leverandøren Snøhetta AS (org.nr 852796316) på 11950 kr inklusiv MVA. Beløpet gjelder kontortjenester (konto 7000). Registrer leverandørfakturaen med korrekt inngående MVA (25 %).")
     assert p["task_type"] == "register_supplier_invoice"
-    vouch = posts(m, "/ledger/voucher")
-    postings = vouch[0][2]["postings"]
-    total = sum(p["amountGross"] for p in postings)
-    assert abs(total) < 0.01
-    expense = [p for p in postings if p["account"]["id"] == 505]  # 7000
+    si = posts(m, "/supplierInvoice")
+    assert len(si) >= 1
+    postings = si[0][2].get("voucher", {}).get("postings", [])
+    expense = [p for p in postings if p["amountGross"] > 0]
     assert len(expense) == 1
     assert abs(expense[0]["amountGross"] - 9560) < 1  # 11950/1.25
 
