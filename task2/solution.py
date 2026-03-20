@@ -459,7 +459,10 @@ def get_or_create_employee(base_url, token, name=None, email=None):
 
     # Create new employee
     dept_id = get_or_create_department(base_url, token)
-    parts = (name or "Unknown Employee").split() if isinstance(name, str) else ["Unknown", "Employee"]
+    if name and isinstance(name, str):
+        parts = name.split()
+    else:
+        parts = ["Unknown", "Employee"]
     body = {
         "firstName": parts[0],
         "lastName": " ".join(parts[1:]) or "Employee",
@@ -1361,7 +1364,7 @@ def handle_project_invoice(base_url, token, e):
     print(f"activity: id={act_id}")
 
     # Step 5: Register timesheet hours
-    hours = float(e.get("hours") or e.get("count") or 0)
+    hours = float(e.get("hours") or e.get("hoursWorked") or e.get("count") or 0)
     hourly_rate = float(e.get("hourlyRate") or e.get("rate") or 0)
     # Try to extract from lines if not set directly
     lines = e.get("lines", [])
