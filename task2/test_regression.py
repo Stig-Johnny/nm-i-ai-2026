@@ -110,13 +110,16 @@ def test_R01_create_customer_en():
 
 
 def test_R02_create_customer_de():
-    """Round 1: Create customer Bergwerk GmbH (DE)"""
+    """Round 1: Create customer Bergwerk GmbH (DE) — with address"""
     p, m = run("Erstellen Sie den Kunden Bergwerk GmbH mit der Organisationsnummer 946768693. Die Adresse ist Solveien 5, 3015 Drammen. E-Mail: post@bergwerk.no.")
     assert p["task_type"] == "create_customer"
     b = posts(m, "/customer")[0][2]
     assert b["name"] == "Bergwerk GmbH"
     assert b["organizationNumber"] == "946768693"
     assert b["email"] == "post@bergwerk.no"
+    assert b["physicalAddress"]["addressLine1"] == "Solveien 5", f"Got: {b['physicalAddress']['addressLine1']}"
+    assert b["physicalAddress"]["postalCode"] == "3015"
+    assert b["physicalAddress"]["city"] == "Drammen"
 
 
 def test_R03_create_department_fr():
@@ -161,7 +164,7 @@ def test_R06_create_product_es():
 
 
 def test_R07_create_project_es():
-    """Round 1: Project Actualización Sierra (ES)"""
+    """Round 1: Project Actualización Sierra (ES) — verify PM name"""
     p, m = run('Crea el proyecto "Actualización Sierra" vinculado al cliente Sierra SL (org. nº 953403188). El director del proyecto es Ana Romero (ana.romero@example.org).')
     assert p["task_type"] == "create_project"
     proj = posts(m, "/project")
@@ -169,6 +172,13 @@ def test_R07_create_project_es():
     assert proj[0][2]["name"] == "Actualización Sierra"
     assert proj[0][2].get("customer") is not None
     assert proj[0][2].get("projectManager") is not None
+    # Verify the employee (PM) was created with correct name
+    emp = [x for x in posts(m, "/employee") if "/employment" not in x[1] and "/entitlement" not in x[1]]
+    assert len(emp) >= 1, "PM employee should be created"
+    pm_body = emp[0][2]
+    assert pm_body["firstName"] == "Ana", f"PM firstName: {pm_body.get('firstName')}"
+    assert pm_body["lastName"] == "Romero", f"PM lastName: {pm_body.get('lastName')}"
+    assert pm_body.get("email") == "ana.romero@example.org"
 
 
 def test_R08_create_supplier_no_sjobris():
