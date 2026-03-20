@@ -50,7 +50,7 @@ def nms(boxes, scores, iou_thresh=0.5):
     return keep
 
 
-def postprocess(output, orig_w, orig_h, scale, pad_x, pad_y, conf_thresh=0.5, iou_thresh=0.5):
+def postprocess(output, orig_w, orig_h, scale, pad_x, pad_y, conf_thresh=0.001, iou_thresh=0.5):
     preds = output[0]
     if len(preds.shape) == 3:
         preds = preds[0]
