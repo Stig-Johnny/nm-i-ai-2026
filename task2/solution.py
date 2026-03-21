@@ -712,7 +712,7 @@ def handle_create_employee(base_url, token, e):
                 emp_form_map = {"fast stilling": "PERMANENT", "permanent": "PERMANENT",
                                 "midlertidig": "TEMPORARY", "temporary": "TEMPORARY", "vikariat": "TEMPORARY"}
                 emp_form_raw = (e.get("employmentType") or e.get("employmentForm") or "").lower()
-                emp_form = emp_form_map.get(emp_form_raw, "NOT_CHOSEN")
+                emp_form = emp_form_map.get(emp_form_raw, "PERMANENT")  # Default to PERMANENT for standard contracts
                 det_body = {
                     "employment": {"id": employment_id},
                     "date": e["startDate"],
@@ -725,18 +725,24 @@ def handle_create_employee(base_url, token, e):
                 daily_hours = e.get("dailyWorkingHours") or e.get("workingHoursPerDay") or e.get("hoursPerDay")
                 if daily_hours:
                     det_body["shiftDurationHours"] = float(daily_hours)
+                elif e.get("employmentPercentage") and float(e.get("employmentPercentage")) < 100:
+                    # For part-time, calculate from standard 7.5h
+                    det_body["shiftDurationHours"] = round(7.5 * float(e["employmentPercentage"]) / 100, 1)
                 if e.get("baseSalary") or e.get("annualSalary"):
                     salary = float(e.get("annualSalary") or e.get("baseSalary") or 0)
                     det_body["annualSalary"] = salary
                 occ_code = e.get("occupationCode") or e.get("occupationalCode") or e.get("positionCode") or e.get("styrk") or e.get("stillingskode")
                 if occ_code:
-                    # Look up occupation code
-                    _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
-                                        {"nameNO": occ_code, "count": 1})
-                    occ_vals = occ_resp.get("values", [])
+                    # Look up occupation code — try by code first (if numeric), then by name
+                    occ_vals = []
+                    if str(occ_code).isdigit():
+                        _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
+                                            {"code": str(occ_code), "count": 1})
+                        occ_vals = occ_resp.get("values", [])
                     if not occ_vals:
                         _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
-                                            {"code": occ_code, "count": 1})
+                                            {"nameNO": str(occ_code), "count": 1})
+                        occ_vals = occ_resp.get("values", [])
                         occ_vals = occ_resp.get("values", [])
                     if occ_vals:
                         det_body["occupationCode"] = {"id": occ_vals[0]["id"]}
@@ -3220,7 +3226,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-1835"
+BUILD_VERSION = "v20260321-1900"
 
 @app.get("/health")
 def health():
