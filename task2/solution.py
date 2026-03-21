@@ -666,7 +666,10 @@ def handle_create_employee(base_url, token, e):
     emp_email = e.get("email") or e.get("employeeEmail")
     if not emp_email and e.get("firstName") and e.get("lastName"):
         # Generate default email if missing (required by Tripletex)
-        emp_email = f"{e['firstName'].lower()}.{e['lastName'].lower()}@example.org"
+        import unicodedata
+        def _ascii(s):
+            return unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode().lower().replace(' ', '')
+        emp_email = f"{_ascii(e['firstName'])}.{_ascii(e['lastName'])}@example.org"
     if emp_email: body["email"] = emp_email
     dob = e.get("dateOfBirth") or e.get("birthDate") or e.get("fodselsdato") or e.get("geburtsdatum")
     if dob: body["dateOfBirth"] = dob
@@ -1473,19 +1476,7 @@ def handle_register_supplier_invoice(base_url, token, e):
         si_id = val.get("id")
         print(f"  amount={val.get('amount')} amountCurrency={val.get('amountCurrency')} id={si_id}")
 
-        # If amount is 0, update voucher postings to trigger recalculation
-        if not val.get("amount") and si_id:
-            voucher_id = val.get("voucher", {}).get("id") if isinstance(val.get("voucher"), dict) else None
-            if not voucher_id:
-                _, si_detail = tx_get(base_url, token, f"/supplierInvoice/{si_id}", {"fields": "id,voucher"})
-                voucher_id = si_detail.get("value", {}).get("voucher", {}).get("id")
-            if voucher_id:
-                # Format as OrderLinePosting array (required by this endpoint)
-                olp = [{"posting": p} for p in si_postings]
-                st_vp, resp_vp = tx_put(base_url, token,
-                    f"/supplierInvoice/voucher/{voucher_id}/postings", olp,
-                    params={"sendToLedger": "true"})
-                print(f"  update voucher postings: {st_vp} {str(resp_vp)[:300]}")
+        # Note: voucher postings can't be updated after creation ("Can not put postings on a voucher that already have postings")
         return True
 
     # Try WITH amountCurrency as fallback
@@ -2929,6 +2920,13 @@ def handle_register_receipt_expense(base_url, token, e):
             si["vatAmount"] = total_vat or round(amt * vat_pct / 100, 2)
             si["totalAmountInclVat"] = total_incl or round(amt * (1 + vat_pct / 100), 2)
 
+    # Safety net — if netAmount still 0, derive from totalAmount
+    if not si.get("netAmount") and total_incl:
+        vat_pct = float(si.get("vatRate") or items[0].get("vatRate", 25) if items else 25)
+        si["netAmount"] = round(total_incl / (1 + vat_pct / 100), 2)
+        si["vatAmount"] = round(total_incl - si["netAmount"], 2)
+        si["totalAmountInclVat"] = total_incl
+
     if not si.get("vatRate"):
         si["vatRate"] = items[0].get("vatRate", 25) if items else 25
 
@@ -2939,6 +2937,10 @@ def handle_register_receipt_expense(base_url, token, e):
     # Ensure supplier name
     if not si.get("supplierName"):
         si["supplierName"] = si.get("storeName") or si.get("merchant") or si.get("vendor") or "Kvittering"
+
+    # Set invoice date from receipt date
+    if si.get("date") and not si.get("invoiceDate"):
+        si["invoiceDate"] = si["date"]
 
     # Generate invoice number from date
     if not si.get("invoiceNumber"):
@@ -3018,10 +3020,10 @@ def normalize_entities(entities):
         "dailyWorkingHours": ["workingHoursPerDay", "hoursPerDay", "arbeidstimer"],
         "employmentPercentage": ["percentageOfFullTimeEquivalent", "stillingsprosent"],
         # Currency
-        "currencyGainNOK": ["currencyGain", "exchangeRateGain", "exchangeRateGainNOK", "exchangeGainAmount", "agio", "kursgewinn", "forexGain"],
-        "currencyLossNOK": ["currencyLoss", "exchangeRateLoss", "exchangeRateLossNOK", "exchangeLossAmount", "disagio", "kursverlust", "forexLoss"],
-        "paymentAmountNOK": ["paymentAmount", "paidAmountNOK", "paymentAmountNok", "invoiceAmountNok"],
-        "exchangeDifferenceAccount": ["fxAccount", "currencyAccount", "gainLossAccount", "differenceAccount", "exchangeLossAccount", "exchangeGainAccount"],
+        "currencyGainNOK": ["currencyGain", "exchangeRateGain", "exchangeRateGainNOK", "exchangeGainAmount", "agioAmount", "agio", "kursgewinn", "forexGain"],
+        "currencyLossNOK": ["currencyLoss", "exchangeRateLoss", "exchangeRateLossNOK", "exchangeLossAmount", "disagioAmount", "disagio", "kursverlust", "forexLoss"],
+        "paymentAmountNOK": ["paymentAmount", "paidAmountNOK", "paymentAmountNok", "paymentAmountInNOK", "invoiceAmountNok", "invoiceAmountInNOK"],
+        "exchangeDifferenceAccount": ["fxAccount", "currencyAccount", "gainLossAccount", "differenceAccount", "exchangeLossAccount", "exchangeGainAccount", "agioAccount", "disagioAccount"],
         # Hours / timesheet
         "hoursLogged": ["hourEntries", "timeEntries", "timeLogs", "hoursRecorded", "hoursRegistration", "timesheet", "employeeHours", "workedHours"],
         # Transactions
@@ -3050,12 +3052,12 @@ def normalize_entities(entities):
     for k, v in list(entities.items()):
         kl = k.lower()
         if v is not None and isinstance(v, (int, float)):
-            if _re.search(r'(exchange|forex|currency).*(loss|disagio)', kl) and not e.get("currencyLossNOK"):
+            if _re.search(r'(exchange|forex|currency|disagio).*(loss|disagio|amount)', kl) and not e.get("currencyLossNOK"):
                 e["currencyLossNOK"] = float(v)
-            elif _re.search(r'(exchange|forex|currency).*(gain|agio)', kl) and not e.get("currencyGainNOK"):
+            elif _re.search(r'(exchange|forex|currency|agio).*(gain|agio|amount)', kl) and not e.get("currencyGainNOK"):
                 e["currencyGainNOK"] = float(v)
         if v is not None and isinstance(v, (int, float, str)):
-            if _re.search(r'(exchange|forex|currency).*(loss|gain|diff).*account', kl) and not e.get("exchangeDifferenceAccount"):
+            if _re.search(r'(exchange|forex|currency|agio|disagio).*(loss|gain|diff|agio|disagio).*account', kl) and not e.get("exchangeDifferenceAccount"):
                 e["exchangeDifferenceAccount"] = v
 
     # Regex fallback for hours/timesheet arrays
@@ -3080,8 +3082,8 @@ def normalize_entities(entities):
 
     # Merge customerPayments + supplierPayments into bankTransactions
     if "bankTransactions" not in e or not e["bankTransactions"]:
-        cust_payments = e.get("customerPayments") or []
-        supp_payments = e.get("supplierPayments") or []
+        cust_payments = e.get("customerPayments") or e.get("incomingPayments") or e.get("receivedPayments") or []
+        supp_payments = e.get("supplierPayments") or e.get("outgoingPayments") or e.get("sentPayments") or []
         if cust_payments or supp_payments:
             merged = []
             for cp in cust_payments:
@@ -3091,6 +3093,23 @@ def normalize_entities(entities):
                     sp["amount"] = -abs(sp["amount"])
                 merged.append(sp)
             e["bankTransactions"] = merged
+
+    # Regex fallback for payment arrays
+    if not e.get("bankTransactions"):
+        for k, v in list(entities.items()):
+            if isinstance(v, list) and v and isinstance(v[0], dict) and _re.search(r'payment|betaling|zahlung|pago|paiement', k.lower()):
+                if any('amount' in str(item) or 'customerName' in str(item) or 'supplierName' in str(item) for item in v):
+                    if 'incoming' in k.lower() or 'customer' in k.lower() or 'received' in k.lower():
+                        for item in v:
+                            item.setdefault("customerName", item.get("customerName", ""))
+                    elif 'outgoing' in k.lower() or 'supplier' in k.lower() or 'sent' in k.lower():
+                        for item in v:
+                            item.setdefault("supplierName", item.get("supplierName", ""))
+                            if item.get("amount", 0) > 0:
+                                item["amount"] = -abs(item["amount"])
+                    if not e.get("bankTransactions"):
+                        e["bankTransactions"] = []
+                    e["bankTransactions"].extend(v)
 
     # Handle hours as list (multiple employees) → hoursLogged
     if isinstance(e.get("hours"), list):
@@ -3254,7 +3273,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2120"
+BUILD_VERSION = "v20260321-2150"
 
 @app.get("/health")
 def health():
