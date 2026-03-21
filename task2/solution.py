@@ -1890,7 +1890,8 @@ def handle_project_invoice(base_url, token, e):
             act_id = all_acts["values"][0]["id"]
     print(f"activity: id={act_id}")
 
-    # Step 5: Register timesheet hours
+    # Step 5: Register timesheet hours — support multiple employees
+    hours_logged = e.get("hoursLogged") or []
     hours = float(e.get("hours") or e.get("hoursWorked") or e.get("count") or 0)
     hourly_rate = float(e.get("hourlyRate") or e.get("rate") or 0)
     # Try to extract from lines if not set directly
@@ -1899,7 +1900,22 @@ def handle_project_invoice(base_url, token, e):
         hours = float(lines[0].get("count") or lines[0].get("hours") or 0)
     if not hourly_rate and lines:
         hourly_rate = float(lines[0].get("unitPrice") or lines[0].get("rate") or 0)
-    if emp_id and hours > 0:
+
+    # Register hours for each employee in hoursLogged
+    if hours_logged:
+        for hl in hours_logged:
+            hl_name = hl.get("employeeName")
+            hl_email = hl.get("employeeEmail")
+            hl_hours = float(hl.get("hours") or 0)
+            if hl_hours > 0:
+                hl_emp_id = get_or_create_employee(base_url, token, name=hl_name, email=hl_email)
+                if hl_emp_id:
+                    ts_body = {"employee": {"id": hl_emp_id}, "date": today, "hours": hl_hours}
+                    if proj_id: ts_body["project"] = {"id": proj_id}
+                    if act_id: ts_body["activity"] = {"id": act_id}
+                    st_ts, ts_resp = tx_post(base_url, token, "/timesheet/entry", ts_body)
+                    print(f"timesheet {hl_name}: {st_ts} hours={hl_hours}")
+    elif emp_id and hours > 0:
         ts_body = {
             "employee": {"id": emp_id},
             "date": today,
@@ -1922,6 +1938,35 @@ def handle_project_invoice(base_url, token, e):
         }
         st_hr, hr_resp = tx_post(base_url, token, "/employee/hourlyCostAndRate", hr_body)
         print(f"hourly rate: {st_hr} {str(hr_resp)[:200] if st_hr != 201 else ''}")
+
+    # Step 6b: Register supplier cost on project
+    supplier_cost = e.get("supplierCost") or e.get("supplierCosts")
+    if supplier_cost:
+        costs = [supplier_cost] if isinstance(supplier_cost, dict) else supplier_cost
+        for sc in costs:
+            sc_name = sc.get("supplierName")
+            sc_org = sc.get("supplierOrgNumber")
+            sc_amount = float(sc.get("amount") or 0)
+            if sc_amount:
+                sc_supplier_id = get_or_create_supplier(base_url, token, name=sc_name, org_number=sc_org)
+                # Post supplier cost as a voucher linked to the project
+                expense_acct = find_account_id(base_url, token, 4300)  # cost of goods/services
+                payable_acct = find_account_id(base_url, token, 2400)  # accounts payable
+                if expense_acct and payable_acct:
+                    expense_posting = {"row": 1, "date": today, "description": f"Leverandorkostnad {sc_name or ''}".strip(),
+                         "account": {"id": expense_acct},
+                         "amountGross": round(sc_amount, 2), "amountGrossCurrency": round(sc_amount, 2)}
+                    if proj_id:
+                        expense_posting["project"] = {"id": proj_id}
+                    postings = [
+                        expense_posting,
+                        {"row": 2, "date": today, "description": f"Leverandorgjeld {sc_name or ''}".strip(),
+                         "account": {"id": payable_acct},
+                         "amountGross": round(-sc_amount, 2), "amountGrossCurrency": round(-sc_amount, 2)},
+                    ]
+                    st_sc, resp_sc = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                        "date": today, "description": f"Prosjektkostnad {sc_name or ''}".strip(), "postings": postings})
+                    print(f"supplier cost voucher: {st_sc} amount={sc_amount} {str(resp_sc)[:200] if st_sc != 201 else ''}")
 
     # Step 7: Create invoice
     ensure_bank_account(base_url, token)
