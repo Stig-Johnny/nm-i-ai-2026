@@ -3067,6 +3067,19 @@ def normalize_entities(entities):
                     e[canonical] = e[alias]
                     break
 
+    # Regex fallback for currency-related keys the LLM might invent
+    import re as _re
+    for k, v in list(entities.items()):
+        kl = k.lower()
+        if v is not None and isinstance(v, (int, float)):
+            if _re.search(r'(exchange|forex|currency).*(loss|disagio)', kl) and not e.get("currencyLossNOK"):
+                e["currencyLossNOK"] = float(v)
+            elif _re.search(r'(exchange|forex|currency).*(gain|agio)', kl) and not e.get("currencyGainNOK"):
+                e["currencyGainNOK"] = float(v)
+        if v is not None and isinstance(v, (int, float, str)):
+            if _re.search(r'(exchange|forex|currency).*(loss|gain|diff).*account', kl) and not e.get("exchangeDifferenceAccount"):
+                e["exchangeDifferenceAccount"] = v
+
     # Also ensure employeeEmail from email
     if "employeeEmail" not in e:
         e["employeeEmail"] = e.get("email")
@@ -3250,7 +3263,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2010"
+BUILD_VERSION = "v20260321-2015"
 
 @app.get("/health")
 def health():
