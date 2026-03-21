@@ -1458,6 +1458,7 @@ def handle_register_supplier_invoice(base_url, token, e):
             "account": {"id": payable_acct_id},
             "amount": round(-total_incl, 2), "amountCurrency": round(-total_incl, 2), "amountGross": round(-total_incl, 2),
             "amountGrossCurrency": round(-total_incl, 2),
+            "supplier": {"id": supplier_id} if supplier_id else None,
         },
     ]
 
@@ -3306,7 +3307,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2220"
+BUILD_VERSION = "v20260321-2225"
 
 @app.get("/health")
 def health():
