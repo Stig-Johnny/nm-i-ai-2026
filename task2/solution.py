@@ -62,9 +62,11 @@ SYSTEM_PROMPT = """You are an expert accounting AI that parses task prompts into
 Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk, German, French), extract:
 
 {
-  "task_type": "one of: create_employee, create_customer, create_supplier, create_product, create_department, create_project, create_invoice, create_travel_expense, delete_travel_expense, register_payment, register_supplier_invoice, run_payroll, create_credit_note, update_employee, update_customer, create_contact, create_order, invoice_with_payment, project_invoice, reverse_voucher, delete_entity, bank_reconciliation, unknown",
+  "task_type": "one of: create_employee, create_customer, create_supplier, create_product, create_department, create_project, create_invoice, create_travel_expense, delete_travel_expense, register_payment, register_supplier_invoice, run_payroll, create_credit_note, update_employee, update_customer, create_contact, create_order, invoice_with_payment, project_invoice, reverse_voucher, delete_entity, bank_reconciliation, register_receipt_expense, correct_ledger_errors, unknown",
   // Use 'project_invoice' when the task involves: registering hours on a project, setting fixed price on a project, or generating an invoice linked to a project. If the prompt mentions a project name AND an invoice, use project_invoice.
   // Use 'create_accounting_dimension' when creating free accounting dimensions with values and/or posting vouchers linked to dimension values
+  // Use 'correct_ledger_errors' when asked to find and correct errors in the ledger/vouchers. Extract: errors [{errorType (wrong_account|duplicate|missing_vat|wrong_amount), wrongAccount, correctAccount, amount, correctAmount, vatAccount}]
+  // Use 'register_receipt_expense' when asked to register an expense from a receipt (kvittering/recibo/Quittung). Extract: items [{description, amount, vatRate, accountNumber}], department, supplierName, supplierOrgNumber, totalAmount, vatAmount, date. Common expense accounts: 6540 (office supplies), 7100 (travel), 7140 (transport/togbillett), 7350 (parking), 6800 (office equipment), 6300 (leasing), 4300 (goods for resale). VAT: 25% standard, 15% food, 12% transport, 0% exempt.
   "entities": {
     // ALL relevant data extracted from the prompt
     // Names: firstName, lastName (split properly)
@@ -76,8 +78,7 @@ Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk
     // For invoices: customerName, customerOrgNumber, lines [{description, unitPrice, count}]
     // For supplier invoices: supplierName, supplierOrgNumber, invoiceNumber, totalAmountInclVat, netAmount, vatAmount, vatRate, accountNumber
     // For payroll: employeeName, employeeEmail, baseSalary, bonus, totalAmount
-    // For travel expenses: employeeName, employeeEmail, title, date, department, expenses [{description, amount}], diet {dailyRate, days, total}
-    // For receipt-based travel expenses (kvittering/Quittung): extract amount, date, vendor from the receipt/PDF; use 'togbillett'/'train ticket' → accountNumber 7140, vatRate 12 (Norwegian passenger transport)
+    // For travel expenses: employeeName, employeeEmail, title, date, expenses [{description, amount}], diet {dailyRate, days, total}
     // For products: name, number (product number), priceExcludingVat, vatRate
     // For projects: name (project name), customerName, customerOrgNumber, projectManagerName, projectManagerEmail, fixedPrice, invoicePercentage
     // For accounting dimensions: dimensionName, dimensionValues [strings], accountNumber (number), amount, linkedDimensionValue
@@ -363,7 +364,6 @@ def parse_with_claude(prompt, file_texts, raw_files=None):
     import time as _time
     start = _time.time()
 
-    # Always use LLM for parsing — regex is fragile across 7 languages
     print(f"LLM PARSE: {len(prompt)} chars")
 
     full_prompt = prompt
@@ -382,44 +382,22 @@ def parse_with_claude(prompt, file_texts, raw_files=None):
         except Exception:
             pass
 
+    # Check if we have PDF/image files that need vision — use Anthropic SDK
+    has_visual_files = raw_files and any(
+        f.get("_rendered_image_b64") or f.get("mime_type", "").startswith("image/")
+        for f in raw_files
+    )
+
+    raw = None
+    if has_visual_files:
+        raw = _parse_with_sdk(prompt, raw_files)
+    if raw is None:
+        raw = _parse_with_cli(full_prompt)
+    if raw is None:
+        _log_request(prompt, file_texts, None, False, _time.time() - start)
+        return None
+
     try:
-        # Use Anthropic SDK directly so we can pass PDFs/images natively
-        # (scanned receipts as image-based PDFs can't be read by pdfminer)
-        from anthropic import Anthropic as _Anthropic
-        _client = _Anthropic()
-        content_blocks = []
-
-        # Add any raw files as native documents/images
-        if raw_files:
-            for rf in raw_files:
-                mime = rf.get("mime_type", "")
-                b64 = rf.get("content_base64", "")
-                fname = rf.get("filename", "file")
-                if b64:
-                    if "pdf" in mime:
-                        content_blocks.append({
-                            "type": "document",
-                            "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
-                            "title": fname,
-                        })
-                    elif "image" in mime:
-                        img_mime = mime if mime in ("image/jpeg", "image/png", "image/gif", "image/webp") else "image/jpeg"
-                        content_blocks.append({
-                            "type": "image",
-                            "source": {"type": "base64", "media_type": img_mime, "data": b64},
-                        })
-
-        content_blocks.append({"type": "text", "text": full_prompt})
-
-        resp = _client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": content_blocks}],
-        )
-        raw = resp.content[0].text.strip()
-        print(f"LLM raw: {raw[:400]}")
-
         # Clean markdown fences
         if "```" in raw:
             raw = raw.split("```")[1]
@@ -442,17 +420,76 @@ def parse_with_claude(prompt, file_texts, raw_files=None):
 
         _log_request(prompt, file_texts, result if isinstance(result, dict) else result[0], False, _time.time() - start)
         return result
-    except subprocess.TimeoutExpired:
-        print("claude CLI timeout (45s)")
-        _log_request(prompt, file_texts, None, False, _time.time() - start)
-        return None
     except json.JSONDecodeError as e:
         print(f"JSON parse error: {e}")
         _log_request(prompt, file_texts, {"error": str(e)}, False, _time.time() - start)
         return None
+
+
+def _parse_with_sdk(prompt, raw_files):
+    """Parse using Anthropic SDK with PDF/image document support."""
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+
+        # Build content blocks: text prompt + document/image blocks
+        content = []
+        for f in raw_files:
+            mime = f.get("mime_type", "")
+            fname = f.get("filename", "file")
+            # Use rendered image from scanned PDF if available
+            if f.get("_rendered_image_b64"):
+                content.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": f["_rendered_image_b64"]},
+                })
+                print(f"  SDK: attached rendered PNG from '{fname}'")
+            elif mime.startswith("application/pdf"):
+                b64 = f.get("content_base64", "")
+                content.append({
+                    "type": "document",
+                    "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+                })
+                print(f"  SDK: attached PDF '{fname}'")
+            elif mime.startswith("image/"):
+                b64 = f.get("content_base64", "")
+                content.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": mime, "data": b64},
+                })
+                print(f"  SDK: attached image '{fname}'")
+        content.append({"type": "text", "text": prompt})
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": content}],
+        )
+        raw = resp.content[0].text.strip()
+        print(f"SDK raw: {raw[:400]}")
+        return raw
+    except Exception as e:
+        print(f"SDK error: {e}")
+        return None
+
+
+def _parse_with_cli(full_prompt):
+    """Parse using claude CLI subprocess."""
+    try:
+        result = subprocess.run(
+            [CLAUDE_PATH, "-p", "--model", "haiku", SYSTEM_PROMPT],
+            input=full_prompt,
+            capture_output=True, text=True, timeout=45
+        )
+        raw = result.stdout.strip()
+        print(f"LLM raw: {raw[:400]}")
+        return raw
+    except subprocess.TimeoutExpired:
+        print("claude CLI timeout (45s)")
+        return None
     except Exception as e:
         print(f"claude CLI error: {e}")
-        _log_request(prompt, file_texts, {"error": str(e)}, False, _time.time() - start)
         return None
 
 # ============================================================
@@ -573,7 +610,19 @@ def find_account_id(base_url, token, number):
 # ============================================================
 
 def handle_create_employee(base_url, token, e):
-    dept_id = get_or_create_department(base_url, token)
+    # Find or create named department
+    dept_name = e.get("department") or e.get("departmentName")
+    if dept_name:
+        _, dept_resp = tx_get(base_url, token, "/department", {"name": dept_name, "fields": "id,name", "count": 1})
+        dept_vals = dept_resp.get("values", [])
+        if dept_vals:
+            dept_id = dept_vals[0]["id"]
+        else:
+            st_d, resp_d = tx_post(base_url, token, "/department", {"name": dept_name})
+            dept_id = resp_d.get("value", {}).get("id")
+            print(f"create department '{dept_name}': {st_d}")
+    else:
+        dept_id = get_or_create_department(base_url, token)
     body = {"userType": "STANDARD"}
 
     if "firstName" in e: body["firstName"] = e["firstName"]
@@ -607,12 +656,66 @@ def handle_create_employee(base_url, token, e):
         tx_put(base_url, token, "/employee/entitlement/:grantEntitlementsByTemplate",
                params={"employeeId": emp_id, "template": template})
 
+        # Set national ID number
+        if e.get("nationalIdNumber") or e.get("nationalIdentityNumber"):
+            nid = str(e.get("nationalIdNumber") or e.get("nationalIdentityNumber"))
+            nid = nid.replace(" ", "").replace("-", "").strip()  # Clean OCR artifacts
+            st_nid, resp_nid = tx_put(base_url, token, f"/employee/{emp_id}", {
+                "id": emp_id, "version": resp.get("value", {}).get("version", 0),
+                "nationalIdentityNumber": nid,
+            })
+            print(f"set nationalId: {st_nid} {str(resp_nid)[:200] if st_nid != 200 else ''}")
+
+        # Set bank account number on employee
+        if e.get("bankAccount") or e.get("bankAccountNumber"):
+            ba = e.get("bankAccount") or e.get("bankAccountNumber")
+            # Update employee with bank account
+            _, emp_detail = tx_get(base_url, token, f"/employee/{emp_id}", {"fields": "id,version"})
+            emp_ver = emp_detail.get("value", {}).get("version", 0)
+            st_ba, resp_ba = tx_put(base_url, token, f"/employee/{emp_id}", {
+                "id": emp_id, "version": emp_ver,
+                "bankAccountNumber": str(ba),
+            })
+            print(f"set bankAccount: {st_ba} {str(resp_ba)[:200] if st_ba != 200 else ''}")
+
         # Add employment if startDate
         if e.get("startDate"):
-            tx_post(base_url, token, "/employee/employment", {
+            emp_body = {
                 "employee": {"id": emp_id},
                 "startDate": e["startDate"],
-            })
+            }
+            st_emp, resp_emp = tx_post(base_url, token, "/employee/employment", emp_body)
+            employment_id = resp_emp.get("value", {}).get("id")
+            print(f"create employment: {st_emp} id={employment_id} {str(resp_emp)[:200] if st_emp != 201 else ''}")
+
+            # Add employment details
+            if employment_id:
+                det_body = {
+                    "employment": {"id": employment_id},
+                    "date": e["startDate"],
+                    "employmentType": "ORDINARY",
+                    "remunerationType": "MONTHLY_WAGE",
+                    "percentageOfFullTimeEquivalent": float(e.get("employmentPercentage") or 100),
+                    "workingHoursScheme": "NOT_SHIFT",
+                }
+                if e.get("baseSalary") or e.get("annualSalary"):
+                    salary = float(e.get("annualSalary") or e.get("baseSalary") or 0)
+                    det_body["annualSalary"] = salary
+                occ_code = e.get("occupationCode")
+                if occ_code:
+                    # Look up occupation code
+                    _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
+                                        {"nameNO": occ_code, "count": 1})
+                    occ_vals = occ_resp.get("values", [])
+                    if not occ_vals:
+                        _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
+                                            {"code": occ_code, "count": 1})
+                        occ_vals = occ_resp.get("values", [])
+                    if occ_vals:
+                        det_body["occupationCode"] = {"id": occ_vals[0]["id"]}
+                        print(f"occupationCode: {occ_vals[0]}")
+                st_det, resp_det = tx_post(base_url, token, "/employee/employment/details", det_body)
+                print(f"employment details: {st_det} {str(resp_det)[:300] if st_det != 201 else ''}")
 
     return st in (200, 201)
 
@@ -910,19 +1013,6 @@ def handle_create_travel_expense(base_url, token, e):
         if dest_match:
             destination = dest_match.group(1)
 
-    # Look up department if specified (e.g. "Logistikk")
-    dept_id = None
-    dept_name = e.get("department")
-    if dept_name:
-        _, dr = tx_get(base_url, token, "/department", {"name": dept_name, "count": 5, "fields": "id,name"})
-        depts = dr.get("values", [])
-        if depts:
-            dept_id = depts[0]["id"]
-            print(f"department '{dept_name}' id={dept_id}")
-        else:
-            print(f"department '{dept_name}' not found — will create")
-            dept_id = get_or_create_department(base_url, token, name=dept_name)
-
     te_body = {
         "employee": {"id": emp_id},
         "title": title,
@@ -930,14 +1020,12 @@ def handle_create_travel_expense(base_url, token, e):
             "departureDate": departure,
             "returnDate": return_date,
             "destination": destination,
-            "departureFrom": e.get("departureFrom", ""),
+            "departureFrom": e.get("departureFrom") or "Oslo",
             "purpose": title,
             "isForeignTravel": False,
             "isDayTrip": travel_days <= 1,
         },
     }
-    if dept_id:
-        te_body["department"] = {"id": dept_id}
     st, resp = tx_post(base_url, token, "/travelExpense", te_body)
     te_id = resp.get("value", {}).get("id")
     print(f"create_travel_expense: {st} id={te_id} {str(resp)[:150]}")
@@ -980,17 +1068,8 @@ def handle_create_travel_expense(base_url, token, e):
                     break
         print(f"  rateCategories: {[(r['id'], r.get('name',''), r.get('type','')) for r in rate_cats[:5]]}")
 
-        # Also get rate types for this category
-        rate_type_id = None
         if per_diem_cat:
-            _, rt_resp = tx_get(base_url, token, "/travelExpense/rate", {"rateCategoryId": per_diem_cat["id"], "count": 10, "fields": "id,rate,zone"})
-            rate_types = rt_resp.get("values", [])
-            if rate_types:
-                rate_type_id = rate_types[0]["id"]
-            print(f"  rateTypes for cat {per_diem_cat['id']}: {[(r['id'], r.get('rate',''), r.get('zone','')) for r in rate_types[:5]]}")
-
-        if per_diem_cat:
-            # Pick correct category based on travel duration
+            # Pick correct category based on travel duration FIRST
             # Dagsreise (day trip) vs Overnatting (overnight)
             if travel_days > 1:
                 # Overnight — find "Overnatting over 12 timer" category
@@ -998,6 +1077,15 @@ def handle_create_travel_expense(base_url, token, e):
                     if rc.get("type") == "PER_DIEM" and "overnatting" in rc.get("name", "").lower() and "over 12" in rc.get("name", "").lower():
                         per_diem_cat = rc
                         break
+
+            # THEN get rate types for the selected category
+            rate_type_id = None
+            _, rt_resp = tx_get(base_url, token, "/travelExpense/rate", {"rateCategoryId": per_diem_cat["id"], "count": 10, "fields": "id,rate,zone"})
+            rate_types = rt_resp.get("values", [])
+            if rate_types:
+                rate_type_id = rate_types[0]["id"]
+            print(f"  selected cat: {per_diem_cat['id']} '{per_diem_cat.get('name','')}', rateTypes: {[(r['id'], r.get('rate','')) for r in rate_types[:3]]}")
+
             overnight = "HOTEL" if travel_days > 1 else "NONE"
             pd_body = {
                 "travelExpense": {"id": te_id},
@@ -1232,14 +1320,20 @@ def handle_register_supplier_invoice(base_url, token, e):
         si_body.pop("supplier", None)
 
     st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
-    print(f"supplierInvoice: {st} {str(resp)[:200]}")
+    print(f"supplierInvoice: {st} {str(resp)[:500]}")
 
-    # If 500 (amountCurrency not supported), retry without it
+    # If 500, retry same body (likely timing issue with supplier creation)
+    if st == 500:
+        import time as _t; _t.sleep(1)
+        st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
+        print(f"supplierInvoice (retry same): {st} {str(resp)[:200]}")
+
+    # Last resort: retry without amountCurrency
     if st == 500:
         si_body.pop("amountCurrency", None)
         si_body.pop("currency", None)
         st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
-        print(f"supplierInvoice (retry): {st} {str(resp)[:200]}")
+        print(f"supplierInvoice (retry no amount): {st} {str(resp)[:200]}")
 
     if st in (200, 201):
         return True
@@ -1983,6 +2077,183 @@ def handle_delete_entity(base_url, token, e):
     return st in (200, 204)
 
 
+def handle_correct_ledger_errors(base_url, token, e):
+    """Correct ledger errors by creating correction vouchers."""
+    today = str(date.today())
+    errors = e.get("errors") or []
+    if not errors:
+        print("No errors to correct")
+        return False
+
+    # Get all vouchers in the period
+    period_start = e.get("period") or e.get("periodStart") or "2026-01-01"
+    period_end = e.get("periodEnd") or "2026-12-31"
+    _, v_resp = tx_get(base_url, token, "/ledger/voucher", {
+        "dateFrom": period_start, "dateTo": period_end,
+        "count": 100, "fields": "id,number,date,description,postings"
+    })
+    vouchers = v_resp.get("values", [])
+    print(f"Found {len(vouchers)} vouchers in period")
+
+    for err in errors:
+        err_type = err.get("errorType") or err.get("description", "").lower()
+        amount = float(err.get("amount") or 0)
+        postings = []
+        row = 1
+
+        if "wrong" in err_type and "account" in err_type:
+            # Wrong account: reverse from wrong, post to correct
+            wrong_acct = find_account_id(base_url, token, int(err.get("wrongAccount", 0)))
+            correct_acct = find_account_id(base_url, token, int(err.get("correctAccount", 0)))
+            if wrong_acct and correct_acct:
+                postings = [
+                    {"row": 1, "date": today, "description": f"Korreksjon: feil konto {err.get('wrongAccount')} -> {err.get('correctAccount')}",
+                     "account": {"id": wrong_acct}, "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
+                    {"row": 2, "date": today, "description": f"Korreksjon: riktig konto {err.get('correctAccount')}",
+                     "account": {"id": correct_acct}, "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
+                ]
+
+        elif "duplic" in err_type:
+            # Duplicate voucher: find and reverse it
+            acct_num = int(err.get("account", 0))
+            acct_id = find_account_id(base_url, token, acct_num)
+            bank_id = find_account_id(base_url, token, 1920)
+            if acct_id:
+                postings = [
+                    {"row": 1, "date": today, "description": f"Korreksjon: reversering duplikat bilag konto {acct_num}",
+                     "account": {"id": acct_id}, "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
+                    {"row": 2, "date": today, "description": f"Korreksjon: reversering duplikat",
+                     "account": {"id": bank_id}, "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
+                ]
+
+        elif "vat" in err_type.lower() or "mva" in err_type.lower():
+            # Missing VAT line: add the missing VAT posting
+            acct_num = int(err.get("account", 0))
+            vat_acct_num = int(err.get("vatAccount", 2710))
+            amt_excl = float(err.get("amountExcludingVat") or err.get("amount") or 0)
+            vat_rate = float(err.get("vatRate") or 25)
+            vat_amount = amt_excl * vat_rate / 100
+            acct_id = find_account_id(base_url, token, acct_num)
+            vat_acct_id = find_account_id(base_url, token, vat_acct_num)
+            if vat_acct_id and acct_id:
+                # Debit VAT account, credit expense account (expense was overstated without VAT separation)
+                postings = [
+                    {"row": 1, "date": today, "description": f"Korreksjon: manglende MVA konto {acct_num}",
+                     "account": {"id": vat_acct_id}, "amountGross": round(vat_amount, 2), "amountGrossCurrency": round(vat_amount, 2)},
+                    {"row": 2, "date": today, "description": f"Korreksjon: redusert kostnad konto {acct_num}",
+                     "account": {"id": acct_id}, "amountGross": round(-vat_amount, 2), "amountGrossCurrency": round(-vat_amount, 2)},
+                ]
+
+        elif "amount" in err_type.lower() or "beløp" in err_type.lower():
+            # Wrong amount: reverse difference
+            acct_num = int(err.get("account", 0))
+            wrong_amt = float(err.get("amount") or 0)
+            correct_amt = float(err.get("correctAmount") or 0)
+            diff = wrong_amt - correct_amt
+            acct_id = find_account_id(base_url, token, acct_num)
+            bank_id = find_account_id(base_url, token, 1920)
+            if acct_id and diff:
+                postings = [
+                    {"row": 1, "date": today, "description": f"Korreksjon: feil beløp konto {acct_num} ({wrong_amt} -> {correct_amt})",
+                     "account": {"id": acct_id}, "amountGross": round(-diff, 2), "amountGrossCurrency": round(-diff, 2)},
+                    {"row": 2, "date": today, "description": f"Korreksjon: beløpsdifferanse",
+                     "account": {"id": bank_id}, "amountGross": round(diff, 2), "amountGrossCurrency": round(diff, 2)},
+                ]
+
+        if postings:
+            st, resp = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                "date": today,
+                "description": f"Korreksjon: {err.get('description', 'feil')}",
+                "postings": postings,
+            })
+            print(f"correction voucher #{err.get('errorNumber','?')}: {st} {str(resp)[:200]}")
+        else:
+            print(f"Could not create correction for error: {err}")
+
+    return True
+
+
+def handle_register_receipt_expense(base_url, token, e):
+    """Register expense from a receipt as a voucher with correct account and VAT."""
+    today = str(date.today())
+    receipt_date = e.get("date") or today
+
+    # Input VAT type IDs (for purchases/expenses)
+    NOK_VAT_IN = {"25": 1, "15": 11, "12": 12, "0": 0}
+
+    # Find or create department
+    dept_name = e.get("department") or e.get("departmentName")
+    dept_id = None
+    if dept_name:
+        _, dept_resp = tx_get(base_url, token, "/department", {"name": dept_name, "fields": "id,name", "count": 1})
+        dept_vals = dept_resp.get("values", [])
+        if dept_vals:
+            dept_id = dept_vals[0]["id"]
+        else:
+            st_d, resp_d = tx_post(base_url, token, "/department", {"name": dept_name})
+            dept_id = resp_d.get("value", {}).get("id")
+
+    # Build voucher postings from items or total
+    items = e.get("items") or e.get("lines") or []
+    total_incl = float(e.get("totalAmountInclVat") or e.get("totalAmount") or 0)
+    total_vat = float(e.get("vatAmount") or 0)
+    description = e.get("description") or e.get("supplierName") or "Kvittering"
+
+    # If no items but we have total, create a single posting
+    if not items and total_incl:
+        vat_rate = str(int(e.get("vatRate") or 25))
+        acct_num = int(e.get("accountNumber") or 6540)
+        items = [{"description": description, "amount": total_incl - total_vat, "vatRate": vat_rate, "accountNumber": acct_num}]
+
+    postings = []
+    row = 1
+    total_debit = 0
+    for item in items:
+        amt = float(item.get("amount") or item.get("unitPrice") or 0)
+        if not amt:
+            continue
+        acct_num = int(item.get("accountNumber") or e.get("accountNumber") or 6540)
+        vat_rate = str(int(item.get("vatRate") or e.get("vatRate") or 25))
+        vat_type_id = NOK_VAT_IN.get(vat_rate, 1)
+        acct_id = find_account_id(base_url, token, acct_num)
+        if not acct_id:
+            acct_id = find_account_id(base_url, token, 6540)  # fallback
+
+        posting = {
+            "row": row, "date": receipt_date,
+            "description": item.get("description", description),
+            "account": {"id": acct_id},
+            "amountGross": round(amt, 2),
+            "amountGrossCurrency": round(amt, 2),
+        }
+        if vat_type_id:
+            posting["vatType"] = {"id": vat_type_id}
+        if dept_id:
+            posting["department"] = {"id": dept_id}
+        postings.append(posting)
+        total_debit += amt
+        row += 1
+
+    # Credit posting (bank/card account)
+    bank_id = find_account_id(base_url, token, 1920)
+    postings.append({
+        "row": row, "date": receipt_date,
+        "description": description,
+        "account": {"id": bank_id},
+        "amountGross": round(-(total_incl or total_debit * (1 + float(e.get("vatRate") or 25) / 100)), 2),
+        "amountGrossCurrency": round(-(total_incl or total_debit * (1 + float(e.get("vatRate") or 25) / 100)), 2),
+    })
+
+    voucher_body = {
+        "date": receipt_date,
+        "description": f"Kvittering {description}",
+        "postings": postings,
+    }
+    st, resp = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", voucher_body)
+    print(f"receipt voucher: {st} {str(resp)[:300]}")
+    return st in (200, 201)
+
+
 HANDLERS = {
     "create_employee": handle_create_employee,
     "create_customer": handle_create_customer,
@@ -2012,6 +2283,11 @@ HANDLERS = {
     "accounting_dimension": handle_create_accounting_dimension,
     "register_hours_and_invoice": handle_project_invoice,
     "timesheet_and_invoice": handle_project_invoice,
+    "register_receipt_expense": handle_register_receipt_expense,
+    "correct_ledger_errors": handle_correct_ledger_errors,
+    "ledger_correction": handle_correct_ledger_errors,
+    "receipt_expense": handle_register_receipt_expense,
+    "register_receipt": handle_register_receipt_expense,
     # Aliases for LLM variations
     "create_and_send_invoice": handle_create_invoice,
     "send_invoice": handle_create_invoice,
@@ -2103,15 +2379,50 @@ def extract_file_texts(files):
             name = f.get("filename", "file")
             if "pdf" in mime:
                 try:
-                    import pdfminer.high_level as pdfm
-                    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                        tmp.write(data)
-                        tmp_path = tmp.name
-                    text = pdfm.extract_text(tmp_path)
-                    Path(tmp_path).unlink(missing_ok=True)
-                    texts.append(f"[{name}]: {text[:2000]}")
+                    import fitz  # PyMuPDF
+                    doc = fitz.open(stream=data, filetype="pdf")
+                    pdf_text = ""
+                    for page in doc:
+                        pdf_text += page.get_text()
+                    doc.close()
+                    if pdf_text.strip():
+                        texts.append(f"[{name}]: {pdf_text[:3000]}")
+                        print(f"  PDF '{name}': extracted {len(pdf_text)} chars text")
+                    else:
+                        # Image-based PDF — try OCR with Tesseract
+                        print(f"  PDF '{name}': no text, trying OCR...")
+                        import os as _os
+                        _os.environ["PATH"] = "/opt/homebrew/bin:" + _os.environ.get("PATH", "")
+                        doc2 = fitz.open(stream=data, filetype="pdf")
+                        ocr_text = ""
+                        for page in doc2:
+                            try:
+                                tp = page.get_textpage_ocr(language="nor+eng+deu+fra+spa+por+swe", dpi=300)
+                                ocr_text += tp.extractText()
+                            except Exception as ocr_err:
+                                print(f"  OCR error on page: {ocr_err}")
+                        doc2.close()
+                        if ocr_text.strip():
+                            texts.append(f"[{name}]: {ocr_text[:3000]}")
+                            print(f"  PDF '{name}': OCR extracted {len(ocr_text)} chars")
+                        else:
+                            # Last resort: render as image for SDK vision path
+                            doc3 = fitz.open(stream=data, filetype="pdf")
+                            pix = doc3[0].get_pixmap(dpi=150)
+                            f["_rendered_image_b64"] = base64.b64encode(pix.tobytes("png")).decode()
+                            doc3.close()
+                            texts.append(f"[{name}]: Scanned PDF (image rendered for vision)")
                 except ImportError:
-                    texts.append(f"[{name}]: PDF file (pdfminer not available)")
+                    try:
+                        import pdfminer.high_level as pdfm
+                        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                            tmp.write(data)
+                            tmp_path = tmp.name
+                        text = pdfm.extract_text(tmp_path)
+                        Path(tmp_path).unlink(missing_ok=True)
+                        texts.append(f"[{name}]: {text[:2000]}")
+                    except ImportError:
+                        texts.append(f"[{name}]: PDF file (no PDF library available)")
             elif "image" in mime:
                 texts.append(f"[{name}]: Image file")
             else:
@@ -2143,9 +2454,19 @@ async def solve(request: Request):
     print(f"Files: {[f['filename'] for f in files]}")
     print(f"Base URL: {base_url}")
 
+    # Save full request for replay (files included)
+    try:
+        import time as _t
+        req_dir = LOG_DIR / "requests"
+        req_dir.mkdir(parents=True, exist_ok=True)
+        req_file = req_dir / f"{_t.strftime('%Y%m%d_%H%M%S')}.json"
+        req_file.write_text(json.dumps({"prompt": prompt, "files": files}, ensure_ascii=False))
+    except Exception as e:
+        print(f"Save request error: {e}")
+
     file_texts = extract_file_texts(files)
 
-    # Parse prompt with LLM — pass raw files for native PDF/image handling
+    # Parse prompt with LLM — pass raw files for PDF vision support
     plan = parse_with_claude(prompt, file_texts, raw_files=files)
     if not plan:
         print("LLM parsing failed, no plan generated")
