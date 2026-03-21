@@ -62,6 +62,8 @@ class APIMock:
             return 200, {"values": [{"id": aid, "number": num, "name": f"Acct {num}", "bankAccountNumber": "86010517941"}] if aid else []}
         if "/ledger/vatType" in path: return 200, {"values": [{"id": 1, "name": "Inngående mva 25%", "percentage": 25}]}
         if "/activity" in path: return 200, {"values": [{"id": 77, "name": "Fakturerbart arbeid"}]}
+        if "/ledger/voucher" in path:
+            return 200, {"values": [{"id": 8001, "number": 1, "description": "Payment", "date": "2026-01-15"}]}
         if "/invoice" in path and "paymentType" not in path:
             cust_id = (params or {}).get("customerId")
             if cust_id:
@@ -288,7 +290,7 @@ def test_R14_supplier_invoice_tindra():
     body = si[0][2]
     assert body.get("invoiceNumber") == "INV-2026-3624"
     postings = body.get("voucher", {}).get("postings", [])
-    assert len(postings) == 3  # expense + VAT + credit
+    assert len(postings) == 2  # expense (with vatType) + credit
     expense = [p for p in postings if p.get("amountGross", 0) > 0]
     assert any(abs(p["amountGross"] - 33680) < 1 for p in expense), "Expense posting ~33680"
 
@@ -300,7 +302,7 @@ def test_R15_supplier_invoice_snohetta():
     si = posts(m, "/supplierInvoice")
     assert len(si) >= 1
     postings = si[0][2].get("voucher", {}).get("postings", [])
-    assert len(postings) == 3  # expense + VAT + credit
+    assert len(postings) == 2  # expense (with vatType) + credit
     expense = [p for p in postings if p.get("amountGross", 0) > 0]
     assert any(abs(p["amountGross"] - 9560) < 1 for p in expense)  # 11950/1.25
 
@@ -572,6 +574,179 @@ def test_year_end_closing_monthly():
         execute_plan("http://test", "tok", plan, "")
     vouchers = posts(mock, "/ledger/voucher")
     assert len(vouchers) >= 3, f"Expected >=3 vouchers (depreciation+accrual+salary), got {len(vouchers)}"
+
+
+def test_reminder_fee():
+    """Reminder fee: finds overdue invoice, posts fee voucher with customer, registers partial payment"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "reminder_fee",
+        "entities": {"reminderAmount": 55, "debitAccount": 1500, "creditAccount": 3400, "partialPayment": 5000}
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    vouchers = posts(mock, "/ledger/voucher")
+    assert len(vouchers) >= 1, "Should post reminder fee voucher"
+    puts = [(m, p, b) for m, p, b in mock.calls if m == "PUT" and ":payment" in p]
+    assert len(puts) >= 1, "Should register partial payment"
+
+
+def test_receipt_expense_single_item():
+    """Receipt expense: single item with explicit 3-posting (net+VAT+credit)"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "register_receipt_expense",
+        "entities": {
+            "items": [{"description": "Togbillett", "amount": 14100, "vatRate": 12, "accountNumber": 7140}],
+            "department": "Logistikk", "supplierName": "NSB", "totalAmount": 14100, "vatAmount": 1510.71, "date": "2026-04-13"
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    vouchers = posts(mock, "/ledger/voucher")
+    assert len(vouchers) >= 1, "Should post receipt voucher"
+    v_postings = vouchers[0][2].get("postings", [])
+    assert len(v_postings) == 3, f"Should have 3 postings (net+VAT+credit), got {len(v_postings)}"
+    # Net amount should be 14100/1.12 ≈ 12589.29 (since 14100 = totalAmount = gross)
+    expense = [p for p in v_postings if p.get("amountGross", 0) > 0 and p.get("amountGross", 0) > 2000]
+    assert len(expense) >= 1, "Should have expense posting"
+
+
+def test_currency_payment_with_loss():
+    """Currency payment: pays invoice outstanding, posts disagio voucher"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "register_payment",
+        "entities": {
+            "customerName": "Test GmbH", "customerOrgNumber": "123456789",
+            "exchangeRateLossNOK": 3547.68, "exchangeDifferenceAccount": 5200,
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    # Should register payment
+    puts = [(m, p, b) for m, p, b in mock.calls if m == "PUT" and ":payment" in p]
+    assert len(puts) >= 1, "Should register payment"
+    # Should post currency loss voucher (after normalizer maps exchangeRateLossNOK → currencyLossNOK)
+    vouchers = posts(mock, "/ledger/voucher")
+    assert len(vouchers) >= 1, "Should post currency loss voucher"
+
+
+def test_reverse_voucher():
+    """Reverse voucher: finds and reverses a payment voucher"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "reverse_voucher",
+        "entities": {
+            "customerName": "Test AS", "customerOrgNumber": "123456789",
+            "description": "Web Design", "netAmount": 8000
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    puts = [(m, p, b) for m, p, b in mock.calls if m == "PUT" and ":reverse" in p]
+    assert len(puts) >= 1, "Should reverse a voucher"
+
+
+def test_credit_note():
+    """Credit note: creates credit note from invoice"""
+    p, m = run("O cliente Luz do Sol Lda (org. nº 821149517) reclamou sobre a fatura referente a \"Horas de consultoria\" (16650 NOK excl. IVA). Emita uma nota de crédito completa que reverta a fatura inteira.")
+    # This is complex — goes to LLM. But regex should detect credit note
+    # Actually the regex might not catch this. Let's just test the handler directly.
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "create_credit_note",
+        "entities": {
+            "customerName": "Luz do Sol Lda", "customerOrgNumber": "821149517",
+            "description": "Horas de consultoria", "netAmount": 16650
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    puts = [(m, p, b) for m, p, b in mock.calls if m == "PUT" and ":createCreditNote" in p]
+    assert len(puts) >= 1, "Should create credit note"
+
+
+def test_supplier_invoice_dual_postings():
+    """Supplier invoice: si_postings has 2 entries (with vatType), fallback postings has 3"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "register_supplier_invoice",
+        "entities": {
+            "supplierName": "Test AS", "organizationNumber": "123456789",
+            "invoiceNumber": "INV-001", "totalAmountInclVat": 12500,
+            "netAmount": 10000, "vatAmount": 2500, "vatRate": 25, "accountNumber": 6540
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    # supplierInvoice POST should use 2-posting format
+    si = posts(mock, "/supplierInvoice")
+    assert len(si) >= 1, "Should POST to /supplierInvoice"
+    si_posts = si[0][2].get("voucher", {}).get("postings", [])
+    assert len(si_posts) == 2, f"supplierInvoice should have 2 postings (with vatType), got {len(si_posts)}"
+    assert si_posts[0].get("vatType"), "First posting should have vatType"
+    # Voucher fallback should use 3-posting format
+    vouchers = posts(mock, "/ledger/voucher")
+    if vouchers:
+        v_posts = vouchers[0][2].get("postings", [])
+        assert len(v_posts) == 3, f"Voucher fallback should have 3 postings, got {len(v_posts)}"
+
+
+def test_project_lifecycle_multi_employee():
+    """Project lifecycle: multiple employee timesheets + supplier cost"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "project_invoice",
+        "entities": {
+            "name": "Cloud Migration", "customerName": "Test Ltd", "customerOrgNumber": "123",
+            "fixedPrice": 396900, "projectManagerName": "PM", "projectManagerEmail": "pm@test.org",
+            "timeLogs": [
+                {"employeeName": "Alice", "employeeEmail": "alice@test.org", "hours": 74},
+                {"employeeName": "Bob", "employeeEmail": "bob@test.org", "hours": 85},
+            ],
+            "supplierCost": {"supplierName": "Vendor", "supplierOrgNumber": "456", "amount": 56750},
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    # Should create timesheets for both employees
+    timesheets = posts(mock, "/timesheet/entry")
+    assert len(timesheets) >= 2, f"Should create 2+ timesheet entries, got {len(timesheets)}"
+    # Should create supplier cost voucher
+    vouchers = posts(mock, "/ledger/voucher")
+    assert len(vouchers) >= 1, "Should post supplier cost voucher"
+    # Should create order + invoice
+    orders = posts(mock, "/order")
+    assert len(orders) >= 1, "Should create order"
 
 
 # ============================================================
