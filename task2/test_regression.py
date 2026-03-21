@@ -582,6 +582,12 @@ def test_reminder_fee():
     from task2.solution import regex_parse
     r = regex_parse("L'un de vos clients a une facture en retard. Trouvez la facture en retard et enregistrez des frais de rappel de 50 NOK.")
     assert r is None, f"Reminder prompt should NOT be regex-parsed (got {r.get('task_type') if r else None})"
+    # Bank reconciliation should also bypass regex
+    r2 = regex_parse("Avstem bankutskriften (vedlagt CSV) mot apne fakturaer i Tripletex. Match innbetalinger til kundefakturaer.")
+    assert r2 is None, f"Bank reconciliation should NOT be regex-parsed (got {r2.get('task_type') if r2 else None})"
+    # Reverse voucher should bypass regex
+    r3 = regex_parse("Betalingen ble returnert av banken. Reverser betalingen slik at fakturaen igjen viser utestående beløp.")
+    assert r3 is None, f"Reverse voucher should NOT be regex-parsed (got {r3.get('task_type') if r3 else None})"
     from task2.solution import execute_plan
     mock = APIMock()
     plan = {
