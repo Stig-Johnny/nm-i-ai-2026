@@ -85,6 +85,12 @@ Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk
     // For products: name, number (product number), priceExcludingVat, vatRate
     // For projects: name (project name), customerName, customerOrgNumber, projectManagerName, projectManagerEmail, fixedPrice, invoicePercentage
     // For accounting dimensions: dimensionName, dimensionValues [strings], accountNumber (number), amount, linkedDimensionValue
+    // EMPLOYMENT CONTRACT / OFFER LETTER — extract ALL of:
+    // - firstName, lastName, dateOfBirth (YYYY-MM-DD), email
+    // - nationalIdNumber: 11-digit personnummer (DDMMYYXXXXX) — look for "fødselsnummer", "personnummer", "P-nr", signature blocks
+    // - bankAccountNumber: Norwegian account (XXXX.XX.XXXXX or 11 digits) — look for "kontonummer", "lønn til konto"
+    // - startDate, annualSalary, employmentPercentage, occupationCode (STYRK 4-digit), department
+    // - If nationalIdNumber or bankAccountNumber are NOT in the document, omit them — do NOT guess or fabricate
     // IMPORTANT: Use these EXACT key names. Do NOT use alternatives like productName, netPrice, unitPrice, account, projectManager (string).
   },
   "steps": ["brief description of API calls needed"]
@@ -644,7 +650,8 @@ def handle_create_employee(base_url, token, e):
         # Generate default email if missing (required by Tripletex)
         emp_email = f"{e['firstName'].lower()}.{e['lastName'].lower()}@example.org"
     if emp_email: body["email"] = emp_email
-    if e.get("dateOfBirth"): body["dateOfBirth"] = e["dateOfBirth"]
+    dob = e.get("dateOfBirth") or e.get("birthDate") or e.get("fodselsdato") or e.get("geburtsdatum")
+    if dob: body["dateOfBirth"] = dob
     if e.get("phoneNumberMobile") or e.get("phone") or e.get("phoneNumber"):
         body["phoneNumberMobile"] = e.get("phoneNumberMobile") or e.get("phone") or e.get("phoneNumber")
     if dept_id:
@@ -672,7 +679,7 @@ def handle_create_employee(base_url, token, e):
                params={"employeeId": emp_id, "template": template})
 
         # Set national ID number (LLM may use employeeNumber, nationalIdNumber, or nationalIdentityNumber)
-        nid_raw = e.get("nationalIdNumber") or e.get("nationalIdentityNumber") or e.get("employeeNumber") or e.get("personnummer")
+        nid_raw = e.get("nationalIdNumber") or e.get("nationalIdentityNumber") or e.get("personalNumber") or e.get("personnelNumber") or e.get("personnummer") or e.get("fødselsnummer") or e.get("personalIdNumber") or e.get("employeeNumber")
         if nid_raw and len(str(nid_raw).replace(" ", "").replace("-", "")) == 11:
             nid = str(nid_raw)
             nid = nid.replace(" ", "").replace("-", "").strip()
@@ -721,7 +728,7 @@ def handle_create_employee(base_url, token, e):
                 if e.get("baseSalary") or e.get("annualSalary"):
                     salary = float(e.get("annualSalary") or e.get("baseSalary") or 0)
                     det_body["annualSalary"] = salary
-                occ_code = e.get("occupationCode") or e.get("occupationalCode") or e.get("styrk")
+                occ_code = e.get("occupationCode") or e.get("occupationalCode") or e.get("positionCode") or e.get("styrk") or e.get("stillingskode")
                 if occ_code:
                     # Look up occupation code
                     _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
@@ -1276,15 +1283,15 @@ def handle_register_payment(base_url, token, e):
     print(f"invoice payment: {st} amount={payment_amount} {str(resp)[:200]}")
 
     # Post currency gain/loss (agio/disagio) if applicable
-    currency_gain = float(e.get("currencyGainNOK") or e.get("currencyGain") or e.get("exchangeRateGain") or 0)
-    currency_loss = float(e.get("currencyLossNOK") or e.get("currencyLoss") or e.get("exchangeRateLoss") or 0)
+    currency_gain = float(e.get("currencyGainNOK") or e.get("currencyGain") or e.get("exchangeRateGain") or e.get("exchangeRateGainNOK") or e.get("agio") or 0)
+    currency_loss = float(e.get("currencyLossNOK") or e.get("currencyLoss") or e.get("exchangeRateLoss") or e.get("exchangeRateLossNOK") or e.get("disagio") or 0)
     fx_amount = currency_gain or -currency_loss
     if fx_amount:
-        # Agio (gain) → credit 8060, Disagio (loss) → debit 8160
-        if fx_amount > 0:
-            fx_acct = find_account_id(base_url, token, 8060)  # Agio (currency gain)
-        else:
-            fx_acct = find_account_id(base_url, token, 8160)  # Disagio (currency loss)
+        # Use entity's exchange account if specified, else default 8060/8160
+        fx_acct_num = int(e.get("exchangeDifferenceAccount") or e.get("exchangeAccount") or (8060 if fx_amount > 0 else 8160))
+        fx_acct = find_account_id(base_url, token, fx_acct_num)
+        if not fx_acct:
+            fx_acct = find_account_id(base_url, token, 8060 if fx_amount > 0 else 8160)
         bank_acct = find_account_id(base_url, token, 1920)
         if fx_acct and bank_acct:
             st_fx, resp_fx = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
@@ -2968,19 +2975,48 @@ def normalize_entities(entities):
     """Add missing canonical keys from known aliases. NEVER rename — only copy."""
     e = dict(entities)  # Don't mutate original
 
-    # Email: ensure both 'email' and 'employeeEmail' exist
-    if "email" not in e:
-        e["email"] = e.get("employeeEmail") or e.get("supplierEmail") or e.get("customerEmail")
+    # Comprehensive alias table: canonical_key → [aliases]
+    ALIASES = {
+        # Personal
+        "dateOfBirth": ["birthDate", "fodselsdato", "geburtsdatum", "fechaNacimiento", "dateNaissance"],
+        "nationalIdNumber": ["nationalIdentityNumber", "personalNumber", "personnelNumber",
+                             "personnummer", "fødselsnummer", "personalIdNumber", "idNumber"],
+        "bankAccountNumber": ["bankAccount", "kontonummer", "accountNumber_bank"],
+        # Employment
+        "occupationCode": ["occupationalCode", "positionCode", "styrk", "stillingskode", "jobCode"],
+        "dailyWorkingHours": ["workingHoursPerDay", "hoursPerDay", "arbeidstimer"],
+        "employmentPercentage": ["percentageOfFullTimeEquivalent", "stillingsprosent"],
+        # Currency
+        "currencyGainNOK": ["currencyGain", "exchangeRateGain", "exchangeRateGainNOK", "agio", "kursgewinn"],
+        "currencyLossNOK": ["currencyLoss", "exchangeRateLoss", "exchangeRateLossNOK", "disagio", "kursverlust"],
+        "paymentAmountNOK": ["paymentAmount", "paidAmountNOK"],
+        "exchangeDifferenceAccount": ["fxAccount", "currencyAccount", "gainLossAccount", "differenceAccount"],
+        # Hours / timesheet
+        "hoursLogged": ["hourEntries", "timeEntries", "timeLogs", "hoursRecorded", "timesheet"],
+        # Transactions
+        "bankTransactions": ["transactions", "entries", "bankEntries"],
+        # General
+        "email": ["employeeEmail", "supplierEmail", "customerEmail"],
+        "name": ["productName", "supplierName", "customerName", "projectName"],
+        "organizationNumber": ["supplierOrgNumber", "customerOrgNumber", "orgNumber", "customerOrganizationNumber"],
+        "hours": ["hoursWorked", "count"],
+        "priceExcludingVat": ["netPrice", "unitPrice", "priceExcVat", "price"],
+        # Closing
+        "salaryAccrual": ["salaryProvision"],
+        "accrualReversal": ["prepaidReversal"],
+    }
+
+    # Apply aliases: if canonical key is missing, check all aliases
+    for canonical, aliases in ALIASES.items():
+        if canonical not in e or e[canonical] is None:
+            for alias in aliases:
+                if alias in e and e[alias] is not None:
+                    e[canonical] = e[alias]
+                    break
+
+    # Also ensure employeeEmail from email
     if "employeeEmail" not in e:
         e["employeeEmail"] = e.get("email")
-
-    # Name: ensure 'name' exists from variants
-    if "name" not in e:
-        e["name"] = e.get("productName") or e.get("supplierName") or e.get("customerName") or e.get("projectName")
-
-    # Org number: ensure 'organizationNumber' exists
-    if "organizationNumber" not in e:
-        e["organizationNumber"] = e.get("supplierOrgNumber") or e.get("customerOrgNumber") or e.get("orgNumber") or e.get("customerOrganizationNumber")
 
     # Employee name: construct from firstName+lastName
     if "employeeName" not in e:
@@ -2990,13 +3026,25 @@ def normalize_entities(entities):
         if full:
             e["employeeName"] = full
 
-    # Hours
-    if "hours" not in e:
-        e["hours"] = e.get("hoursWorked") or e.get("count")
+    # Merge customerPayments + supplierPayments into bankTransactions
+    if "bankTransactions" not in e or not e["bankTransactions"]:
+        cust_payments = e.get("customerPayments") or []
+        supp_payments = e.get("supplierPayments") or []
+        if cust_payments or supp_payments:
+            merged = []
+            for cp in cust_payments:
+                merged.append(cp)
+            for sp in supp_payments:
+                if sp.get("amount", 0) > 0:
+                    sp["amount"] = -abs(sp["amount"])
+                merged.append(sp)
+            e["bankTransactions"] = merged
 
-    # Price
-    if "priceExcludingVat" not in e:
-        e["priceExcludingVat"] = e.get("netPrice") or e.get("unitPrice") or e.get("priceExcVat") or e.get("price")
+    # Handle hours as list (multiple employees) → hoursLogged
+    if isinstance(e.get("hours"), list):
+        if not e.get("hoursLogged"):
+            e["hoursLogged"] = e["hours"]
+        e["hours"] = 0
 
     return e
 
@@ -3149,7 +3197,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-1745"
+BUILD_VERSION = "v20260321-1825"
 
 @app.get("/health")
 def health():
