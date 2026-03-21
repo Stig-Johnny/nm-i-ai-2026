@@ -2387,8 +2387,9 @@ def handle_reminder_fee(base_url, token, e):
     # 3. Try to create reminder on the invoice
     if target_inv:
         st_rem, resp_rem = tx_put(base_url, token, f"/invoice/{target_inv['id']}/:createReminder",
-                                   params={"type": "REMINDER", "date": today, "includeCharge": "true"})
-        print(f"create reminder: {st_rem} {str(resp_rem)[:200]}")
+                                   params={"type": "REMINDER", "date": today, "includeCharge": "true",
+                                           "dispatchType": "OWN_PRINTER"})
+        print(f"create reminder: {st_rem} {str(resp_rem)[:500]}")
 
     # 4. Create reminder invoice to the customer
     if cust_id:
@@ -3240,7 +3241,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-1920"
+BUILD_VERSION = "v20260321-1935"
 
 @app.get("/health")
 def health():
