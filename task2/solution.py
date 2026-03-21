@@ -936,12 +936,24 @@ def handle_create_travel_expense(base_url, token, e):
             print(f"  rateTypes for cat {per_diem_cat['id']}: {[(r['id'], r.get('rate',''), r.get('zone','')) for r in rate_types[:5]]}")
 
         if per_diem_cat:
+            # Swagger: no countryCode field (causes 422 "Country not enabled")
+            # Swagger: no count field — derive days from startDate/endDate
+            pd_start = e.get("startDate") or e.get("date") or today
+            try:
+                from datetime import date as _d2, timedelta as _td2
+                pd_start_dt = _d2.fromisoformat(pd_start)
+            except Exception:
+                from datetime import date as _d2, timedelta as _td2
+                pd_start_dt = _d2.today()
+            pd_end = (pd_start_dt + _td2(days=max(diet_days - 1, 0))).isoformat()
+
             pd_body = {
                 "travelExpense": {"id": te_id},
                 "rateCategory": {"id": per_diem_cat["id"]},
-                "countryCode": "NO",
                 "overnightAccommodation": "HOTEL" if travel_days > 1 else "NONE",
                 "location": destination or "Norge",
+                "startDate": pd_start,
+                "endDate": pd_end,
                 "isDeductionForBreakfast": False,
                 "isDeductionForLunch": False,
                 "isDeductionForDinner": False,
