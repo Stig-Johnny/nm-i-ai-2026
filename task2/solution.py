@@ -1988,19 +1988,24 @@ def handle_bank_reconciliation(base_url, token, e):
                 payable_id = find_account_id(base_url, token, 2400)
                 abs_amount = abs(tx_amount)
                 if bank_id and payable_id:
-                    st_v, _ = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                    # Get or create supplier for the posting
+                    sc_supplier_id = get_or_create_supplier(base_url, token, name=tx_supp)
+                    payable_posting = {"row": 1, "date": tx_date, "description": f"Leverandorbetaling {tx_supp}",
+                             "account": {"id": payable_id},
+                             "amountGross": round(abs_amount, 2), "amountGrossCurrency": round(abs_amount, 2)}
+                    if sc_supplier_id:
+                        payable_posting["supplier"] = {"id": sc_supplier_id}
+                    st_v, resp_v = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
                         "date": tx_date,
                         "description": f"Betaling {tx_supp} {tx_desc}".strip(),
                         "postings": [
-                            {"row": 1, "date": tx_date, "description": f"Leverandorbetaling {tx_supp}",
-                             "account": {"id": payable_id},
-                             "amountGross": round(abs_amount, 2), "amountGrossCurrency": round(abs_amount, 2)},
+                            payable_posting,
                             {"row": 2, "date": tx_date, "description": f"Bank utbetaling",
                              "account": {"id": bank_id},
                              "amountGross": round(-abs_amount, 2), "amountGrossCurrency": round(-abs_amount, 2)},
                         ],
                     })
-                    print(f"supplier payment {tx_supp} amount={abs_amount}: {st_v}")
+                    print(f"supplier payment {tx_supp} amount={abs_amount}: {st_v} {str(resp_v)[:300] if st_v != 201 else ''}")
 
         return True
 
@@ -3241,7 +3246,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-1935"
+BUILD_VERSION = "v20260321-1940"
 
 @app.get("/health")
 def health():
