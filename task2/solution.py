@@ -3211,8 +3211,12 @@ async def solve(request: Request):
 
     file_texts = extract_file_texts(files)
 
-    # Parse prompt with LLM — pass raw files for PDF vision support
-    plan = parse_with_claude(prompt, file_texts, raw_files=files)
+    # Try regex first (fast, no LLM call), fall back to LLM
+    plan = regex_parse(prompt)
+    if plan:
+        print(f"REGEX PARSE: {plan.get('task_type', '?')}")
+    else:
+        plan = parse_with_claude(prompt, file_texts, raw_files=files)
     if not plan:
         print("LLM parsing failed, no plan generated")
         return JSONResponse({"status": "completed"})
@@ -3231,7 +3235,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2045"
+BUILD_VERSION = "v20260321-2055"
 
 @app.get("/health")
 def health():
