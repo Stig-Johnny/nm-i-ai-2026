@@ -588,6 +588,9 @@ def test_reminder_fee():
     # Reverse voucher should bypass regex
     r3 = regex_parse("Betalingen ble returnert av banken. Reverser betalingen slik at fakturaen igjen viser utestående beløp.")
     assert r3 is None, f"Reverse voucher should NOT be regex-parsed (got {r3.get('task_type') if r3 else None})"
+    # Order→invoice→payment should bypass regex
+    r4 = regex_parse("Opprett ein ordre for kunden Test AS. Konverter ordren til faktura og registrer full betaling.")
+    assert r4 is None, f"Order→invoice→payment should NOT be regex-parsed (got {r4.get('task_type') if r4 else None})"
     from task2.solution import execute_plan
     mock = APIMock()
     plan = {
