@@ -453,6 +453,53 @@ def test_invoice_with_payment_correction():
     assert any(":payment" in p for p in put_paths), "Should register payment"
 
 
+def test_employee_contract_key_variants():
+    """Employee from contract: handles LLM key name variations"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    # Simulate LLM output with non-standard keys (as seen in production)
+    plan = {
+        "task_type": "create_employee",
+        "entities": {
+            "firstName": "Sigrid", "lastName": "Vik",
+            "email": "sigrid.vik@example.org",
+            "birthDate": "1980-05-24",  # NOT dateOfBirth
+            "personnelNumber": "24058057580",  # NOT nationalIdNumber
+            "bankAccount": "53120159778",
+            "department": "Markedsføring",
+            "positionCode": "3323",  # NOT occupationCode
+            "employmentPercentage": 80.0,
+            "annualSalary": 640000,
+            "startDate": "2026-11-03",
+            "employmentType": "Fast stilling",
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+
+    # Employee created with dateOfBirth from birthDate alias
+    emp_posts = [x for x in posts(mock, "/employee") if x[1] == "/employee"]
+    assert len(emp_posts) >= 1, "Should create employee"
+    assert emp_posts[0][2].get("dateOfBirth") == "1980-05-24", "birthDate should map to dateOfBirth"
+
+    # nationalId set via PUT (personnelNumber → nationalIdentityNumber)
+    puts = [(m, p, b) for m, p, b in mock.calls if m == "PUT" and "/employee/" in p and isinstance(b, dict) and "nationalIdentityNumber" in (b or {})]
+    assert len(puts) >= 1, f"Should PUT nationalIdentityNumber (from personnelNumber)"
+
+    # bankAccount set via PUT
+    ba_puts = [(m, p, b) for m, p, b in mock.calls if m == "PUT" and "/employee/" in p and isinstance(b, dict) and "bankAccountNumber" in (b or {})]
+    assert len(ba_puts) >= 1, "Should PUT bankAccountNumber"
+
+    # Employment + details created
+    emp_employment = posts(mock, "/employee/employment")
+    assert len([x for x in emp_employment if x[1] == "/employee/employment"]) >= 1, "Should create employment"
+    emp_details = [x for x in emp_employment if "/details" in x[1]]
+    assert len(emp_details) >= 1, "Should create employment details"
+
+
 def test_bank_reconciliation_with_transactions():
     """Bank reconciliation: processes bankTransactions, registers payments"""
     from task2.solution import execute_plan
