@@ -73,10 +73,26 @@ def posts(mock, path_substr):
     return [(m, p, b) for m, p, b in mock.calls if m == "POST" and path_substr in p]
 
 
+REGEX_WHITELIST = {
+    "create_department", "create_product", "create_customer", "create_employee",
+    "create_supplier", "create_project", "run_payroll",
+    "register_payment", "create_invoice", "register_supplier_invoice",
+}
+
 def run_prompt(prompt):
-    """Parse + execute with mocked API."""
+    """Parse + execute with mocked API (simulates production whitelist + complexity filter)."""
+    import re as _re
     mock = APIMock()
     plan = regex_parse(prompt)
+    # Apply whitelist like production — non-whitelisted types go to LLM
+    if plan and plan.get("task_type") not in REGEX_WHITELIST:
+        plan = None
+    # Complexity guard: long prompts with 3+ actions → force LLM
+    if plan and len(prompt) > 200:
+        prompt_no_email = _re.sub(r'[\w.+-]+@[\w.-]+', '', prompt.lower())
+        action_verbs = set(_re.findall(r'\b(?:opprett|create|registrer|registe|slett|delete|send|generer|generate|gere|oppdater|update|reverser|reverse|kjør|run|konverter|convert|créez|erstellen|envoyez|senden|fakturer|sett\s+fastpris|set\s+fixed|completa|configura)\b', prompt_no_email))
+        if len(action_verbs) >= 2:
+            plan = None
     if not plan:
         return None, mock
     with patch('task2.solution.tx_get', mock.get), \
@@ -200,12 +216,8 @@ TESTS = [
     {
         "prompt": 'Registrer en reiseregning for Magnus Haugen (magnus.haugen@example.org) for "Kundebesøk Bergen". Reisen varte 4 dager med diett (dagsats 800 kr). Utlegg: flybillett 5050 kr og taxi 750 kr.',
         "task_type": "create_travel_expense",
-        "checks": lambda p, m: (
-            len([x for x in posts(m, "/travelExpense") if "/cost" not in x[1] and "/perDiem" not in x[1] and "/rateCategory" not in x[1]]) >= 1
-            and len(posts(m, "/travelExpense/cost")) == 2  # flight + taxi (diet is perDiem)
-            and len(posts(m, "/travelExpense/perDiemCompensation")) >= 1
-            and posts(m, "/travelExpense/perDiemCompensation")[0][2]["count"] == 4
-        ),
+        "checks": lambda p, m: True,
+        "complex": True,  # Goes to LLM — travel expense not in regex whitelist
     },
 
     # --- SUPPLIER INVOICES ---
@@ -453,6 +465,44 @@ TESTS = [
         "task_type": "reminder_fee",
         "checks": lambda p, m: True,
         "complex": True,
+    },
+
+    # --- PROJECT INVOICE (must NOT be misclassified as register_payment) ---
+    {
+        "prompt": 'Sett fastpris 203000 kr på prosjektet "Digital transformasjon" for Stormberg AS (org.nr 834028719). Prosjektleder er Hilde Hansen (hilde.hansen@example.org). Fakturer kunden for 75 % av fastprisen som en delbetaling.',
+        "task_type": "project_invoice",
+        "checks": lambda p, m: True,
+        "complex": True,  # Goes to LLM — regex should NOT match as register_payment
+    },
+
+    # --- TRAVEL EXPENSE ---
+    {
+        "prompt": 'Registrer en reiseregning for Sigurd Hansen (sigurd.hansen@example.org) for "Kundebesøk Kristiansand". Reisen varte 4 dager med diett (dagsats 800 kr). Utlegg: flybillett 3800 kr og taxi 200 kr.',
+        "task_type": "create_travel_expense",
+        "checks": lambda p, m: True,
+        "complex": True,  # Goes to LLM
+    },
+
+    # --- MONTH-END CLOSING (multilingual) ---
+    {
+        "prompt": "Führen Sie den Monatsabschluss für März 2026 durch. Buchen Sie die Rechnungsabgrenzung (3400 NOK pro Monat von Konto 1700 auf Aufwand). Erfassen Sie die monatliche Abschreibung für eine Anlage mit Anschaffungskosten 289700 NOK und Nutzungsdauer 7 Jahre (lineare Abschreibung auf Konto 6020).",
+        "task_type": "year_end_closing",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+    {
+        "prompt": "Perform month-end closing for March 2026. Post accrual reversal (6250 NOK per month from account 1700 to expense). Record monthly depreciation for a fixed asset with acquisition cost 77500 NOK and useful life 6 years (straight-line depreciation to account 6010).",
+        "task_type": "year_end_closing",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- EMPLOYEE FROM OFFER LETTER (PDF) ---
+    {
+        "prompt": "Has recibido una carta de oferta (ver PDF adjunto) para un nuevo empleado. Completa la incorporacion: crea el empleado, asigna el departamento correcto, configura los detalles de empleo con porcentaje y salario anual, y configura las horas de trabajo estandar.",
+        "task_type": "create_employee",
+        "checks": lambda p, m: True,
+        "complex": True,  # PDF task — needs LLM
     },
 ]
 
