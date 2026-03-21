@@ -1312,6 +1312,38 @@ def test_C23_payment_excludes_project_keywords():
             assert plan["task_type"] != "register_payment", f"'{prompt[:50]}' misclassified as register_payment"
 
 
+def test_C24_nynorsk_supplier_invoice():
+    """Competition: Nynorsk supplier invoice with 'motteke' (scored 0/8)."""
+    plan = regex_parse("Me har motteke faktura INV-2026-6998 frå leverandøren Sjøbris AS (org.nr 932482207) på 76850 kr inklusiv MVA. Beløpet gjeld kontortenester (konto 7140). Registrer leverandørfakturaen med korrekt inngåande MVA (25 %).")
+    assert plan is not None, "regex_parse should handle Nynorsk supplier invoice"
+    assert plan["task_type"] == "register_supplier_invoice", f"Got {plan['task_type']}"
+    e = plan["entities"]
+    assert e["supplierName"] == "Sjøbris AS"
+    assert e["invoiceNumber"] == "INV-2026-6998"
+    assert e["totalAmountInclVat"] == 76850.0
+    assert e["accountNumber"] == 7140
+
+
+def test_C25_supplier_invoice_has_currency():
+    """Supplier invoice POST body should include currency field."""
+    from task2.solution import handle_register_supplier_invoice, normalize_entities
+    mock = APIMock()
+    entities = normalize_entities({
+        "supplierName": "Test AS", "organizationNumber": "123456789",
+        "invoiceNumber": "INV-001", "totalAmountInclVat": 12500,
+        "netAmount": 10000, "vatAmount": 2500, "vatRate": 25, "accountNumber": 6540,
+    })
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        handle_register_supplier_invoice("https://mock/v2", "tok", entities)
+    si = posts(mock, "/supplierInvoice")
+    assert len(si) >= 1, "Should attempt SI POST"
+    body = si[0][2]
+    assert body.get("currency") == {"code": "NOK"}, f"Missing currency: {body.get('currency')}"
+    assert body.get("voucherDate") is not None, "Missing voucherDate"
+
+
 # ============================================================
 # Run
 # ============================================================
