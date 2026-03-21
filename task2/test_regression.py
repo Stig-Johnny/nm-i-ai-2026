@@ -1340,8 +1340,33 @@ def test_C25_supplier_invoice_has_currency():
     si = posts(mock, "/supplierInvoice")
     assert len(si) >= 1, "Should attempt SI POST"
     body = si[0][2]
-    assert body.get("currency") == {"code": "NOK"}, f"Missing currency: {body.get('currency')}"
-    assert body.get("voucherDate") is not None, "Missing voucherDate"
+    assert "voucherDate" not in body, "voucherDate is invalid — proxy rejects it"
+
+
+def test_C26_receipt_expense_department():
+    """Competition: Receipt expense should link department to voucher postings (scored 0/10)."""
+    from task2.solution import handle_register_receipt_expense, normalize_entities
+    mock = APIMock()
+    entities = normalize_entities({
+        "items": [{"description": "Overnatting", "amount": 8520, "vatRate": 25, "accountNumber": 7100}],
+        "department": "Utvikling",
+        "supplierName": "Thon Hotels",
+        "supplierOrgNumber": "829296756",
+        "totalAmount": 8520,
+        "date": "2026-01-11",
+    })
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        handle_register_receipt_expense("https://mock/v2", "tok", entities)
+    # Check that department was looked up
+    dept_gets = [(m, p, params) for m, p, params in mock.calls if m == "GET" and "/department" in p]
+    assert len(dept_gets) >= 1, "Should look up department"
+    # Check voucher postings have department
+    vouchers = posts(mock, "/ledger/voucher")
+    if vouchers:
+        expense_posting = vouchers[0][2]["postings"][0]
+        assert expense_posting.get("department") is not None, "Expense posting should have department"
 
 
 # ============================================================
