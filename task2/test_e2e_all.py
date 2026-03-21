@@ -504,6 +504,17 @@ TESTS = [
         "checks": lambda p, m: True,
         "complex": True,  # PDF task — needs LLM
     },
+
+    # --- SUPPLIER INVOICE (Nynorsk) ---
+    {
+        "prompt": "Me har motteke faktura INV-2026-6998 frå leverandøren Sjøbris AS (org.nr 932482207) på 76850 kr inklusiv MVA. Beløpet gjeld kontortenester (konto 7140). Registrer leverandørfakturaen med korrekt inngåande MVA (25 %).",
+        "task_type": "register_supplier_invoice",
+        "checks": lambda p, m: (
+            p["entities"]["invoiceNumber"] == "INV-2026-6998"
+            and p["entities"]["totalAmountInclVat"] == 76850.0
+            and p["entities"]["accountNumber"] == 7140
+        ),
+    },
 ]
 
 

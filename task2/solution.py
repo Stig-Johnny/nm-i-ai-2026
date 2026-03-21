@@ -243,7 +243,7 @@ def regex_parse(prompt):
         if re.search(r'kreditnota|credit\s*note|gutschrift|nota\s+de\s+crédito', pl):
             return {"task_type": "create_credit_note", "entities": {}}
         # Supplier invoice (incoming)
-        if re.search(r'leverandør|supplier|lieferant|fornecedor|fournisseur|proveedor', pl) and re.search(r'mottatt|received|erhalten|recibido|reçu|recebemos|registrer.*faktura|registre.*fatura', pl):
+        if re.search(r'leverandør|supplier|lieferant|fornecedor|fournisseur|proveedor', pl) and re.search(r'mottatt|motteke|received|erhalten|recibido|reçu|recebemos|registrer.*faktura|registre.*fatura', pl):
             supplier_name = find_name_after(p, 'leverandøren', 'Lieferanten', 'supplier', 'fournisseur', 'proveedor', 'fornecedor')
             org = find_org(p)
             inv_match = re.search(r'(INV[\w-]+)', p)
@@ -1477,6 +1477,8 @@ def handle_register_supplier_invoice(base_url, token, e):
         "invoiceNumber": e.get("invoiceNumber") or "",
         "amountCurrency": round(total_incl, 2),
         "supplier": {"id": supplier_id} if supplier_id else None,
+        "currency": {"code": "NOK"},
+        "voucherDate": inv_date,
     }
     if si_minimal.get("supplier") is None:
         si_minimal.pop("supplier", None)
@@ -3342,7 +3344,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2345"
+BUILD_VERSION = "v20260321-2355"
 
 @app.get("/health")
 def health():
