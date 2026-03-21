@@ -1475,10 +1475,7 @@ def handle_register_supplier_invoice(base_url, token, e):
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
         "invoiceNumber": e.get("invoiceNumber") or "",
-        "amount": round(total_incl, 2),
-        "amountCurrency": round(total_incl, 2),
-        "amountExcludingVat": round(net_amount, 2),
-        "amountExcludingVatCurrency": round(net_amount, 2),
+        "amountCurrency": round(total_incl, 2),  # Only writable amount field
         "supplier": {"id": supplier_id} if supplier_id else None,
         "voucher": {
             "date": inv_date,
@@ -3307,7 +3304,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2225"
+BUILD_VERSION = "v20260321-2230"
 
 @app.get("/health")
 def health():
