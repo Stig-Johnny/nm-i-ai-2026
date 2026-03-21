@@ -90,7 +90,7 @@ def run_prompt(prompt):
     # Complexity guard: long prompts with 3+ actions → force LLM
     if plan and len(prompt) > 200:
         prompt_no_email = _re.sub(r'[\w.+-]+@[\w.-]+', '', prompt.lower())
-        action_verbs = set(_re.findall(r'\b(?:opprett|create|registrer|registe|slett|delete|send|generer|generate|gere|oppdater|update|reverser|reverse|kjør|run|konverter|convert|créez|erstellen|envoyez|senden|fakturer|sett\s+fastpris|set\s+fixed|completa|configura)\b', prompt_no_email))
+        action_verbs = set(_re.findall(r'\b(?:opprett|create|crie|registrer|registe|slett|delete|send|generer|generate|gere|oppdater|update|reverser|reverse|kjør|run|konverter|converta|convert|créez|erstellen|envoyez|senden|fakturer|sett\s+fastpris|set\s+fixed|completa|configura)\b', prompt_no_email))
         if len(action_verbs) >= 2:
             plan = None
     if not plan:
@@ -514,6 +514,14 @@ TESTS = [
             and p["entities"]["totalAmountInclVat"] == 76850.0
             and p["entities"]["accountNumber"] == 7140
         ),
+    },
+
+    # --- ORDER→INVOICE→PAYMENT (must NOT be register_payment) ---
+    {
+        "prompt": "Crie um pedido para o cliente Cascata Lda (org. nº 927161524) com os produtos Consultoria de dados (8400) a 5700 NOK e Design web (2535) a 3850 NOK. Converta o pedido em fatura e registe o pagamento total.",
+        "task_type": "invoice_with_payment",
+        "checks": lambda p, m: True,
+        "complex": True,
     },
 ]
 

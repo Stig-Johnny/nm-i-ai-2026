@@ -1409,6 +1409,15 @@ def test_C28_complexity_guard_no_crash():
     # The key assertion is: no crash
 
 
+def test_C29_order_invoice_payment_not_register_payment():
+    """Competition: Portuguese order→invoice→payment must NOT be register_payment (scored 0/8)."""
+    plan = regex_parse('Crie um pedido para o cliente Cascata Lda (org. nº 927161524) com os produtos Consultoria de dados (8400) a 5700 NOK e Design web (2535) a 3850 NOK. Converta o pedido em fatura e registe o pagamento total.')
+    # Should NOT be register_payment — pedido/crie/converta should exclude
+    if plan:
+        assert plan["task_type"] != "register_payment", f"Misclassified as register_payment! Got: {plan['task_type']}"
+    # The key assertion is: no crash
+
+
 # ============================================================
 # Run
 # ============================================================
