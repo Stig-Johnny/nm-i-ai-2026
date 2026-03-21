@@ -1,43 +1,10 @@
 #!/usr/bin/env python3
-"""Polls for new active round and runs the R8 pipeline."""
-import json, time, urllib.request, urllib.error, subprocess, os, socket, base64, struct
+"""Polls for new active rounds. Single pipeline instance enforced."""
+import json, time, urllib.request, urllib.error, subprocess, os, fcntl
 
-def get_token():
-    tabs = json.loads(urllib.request.urlopen("http://localhost:9222/json/list").read())
-    tab_id = tabs[0]["id"]
-    s = socket.socket(); s.connect(("localhost", 9222))
-    key = base64.b64encode(os.urandom(16)).decode()
-    s.send((f"GET /devtools/page/{tab_id} HTTP/1.1\r\nHost: localhost:9222\r\nUpgrade: websocket\r\n"
-            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
-    resp = b""
-    while b"\r\n\r\n" not in resp: resp += s.recv(4096)
-    def ws_send(sock, msg):
-        data = msg.encode(); mask = os.urandom(4); length = len(data)
-        frame = bytearray([0x81, 0x80 | (length if length < 126 else 126)])
-        if length >= 126: frame += struct.pack(">H", length)
-        frame += mask + bytes(b ^ mask[i%4] for i,b in enumerate(data))
-        sock.send(bytes(frame))
-    def ws_recv(sock, timeout=2):
-        sock.settimeout(timeout); data = b""
-        try:
-            while True:
-                chunk = sock.recv(65536)
-                if not chunk: break
-                data += chunk
-        except: pass
-        if len(data) < 2: return ""
-        length = data[1] & 0x7f; offset = 2
-        if length == 126: length = struct.unpack(">H", data[2:4])[0]; offset = 4
-        elif length == 127: length = struct.unpack(">Q", data[2:10])[0]; offset = 10
-        return data[offset:offset+length].decode(errors='replace')
-    ws_send(s, json.dumps({"id": 1, "method": "Network.enable"}))
-    time.sleep(0.2); ws_recv(s, 0.3)
-    ws_send(s, json.dumps({"id": 2, "method": "Network.getAllCookies"}))
-    time.sleep(0.5)
-    cookies = json.loads(ws_recv(s, 1)).get("result", {}).get("cookies", [])
-    s.close()
-    return next((c["value"] for c in cookies if c["name"] == "access_token"), None)
+exec(open("/tmp/astar_auth.py").read())
 
+PIPELINE_LOCK = "/tmp/astar_pipeline.lock"
 seen_rounds = set()
 LOG = "/tmp/astar_poller_main.log"
 
@@ -45,46 +12,71 @@ def log(msg):
     ts = time.strftime("%H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line, flush=True)
-    with open(LOG, "a") as f:
-        f.write(line + "\n")
+    with open(LOG, "a") as f: f.write(line + "\n")
 
-log("Poller started. Watching for new active rounds...")
+def is_pipeline_running():
+    """Check if pipeline lock exists and process is alive."""
+    if os.path.exists(PIPELINE_LOCK):
+        try:
+            with open(PIPELINE_LOCK) as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 0)  # Check if process exists
+            return True
+        except (ValueError, ProcessLookupError, PermissionError):
+            os.remove(PIPELINE_LOCK)
+    return False
+
+log("Poller started (resilient auth, pipeline lock)")
 
 while True:
     try:
         token = get_token()
+        if not token:
+            log("No token"); time.sleep(30); continue
+        
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         req = urllib.request.Request("https://api.ainm.no/astar-island/rounds", headers=headers)
-        rounds = json.loads(urllib.request.urlopen(req).read())
+        rounds = json.loads(urllib.request.urlopen(req, timeout=10).read())
         
         for r in rounds:
             if r["status"] == "active" and r["id"] not in seen_rounds:
                 rn = r["round_number"]
                 log(f"NEW ACTIVE ROUND: R{rn} ({r['id']})")
                 
-                # Check budget first
-                req2 = urllib.request.Request("https://api.ainm.no/astar-island/budget", headers=headers)
-                budget = json.loads(urllib.request.urlopen(req2).read())
-                used = budget.get("queries_used", 0)
-                
-                if used >= 45:
-                    log(f"Budget nearly exhausted ({used}/50). Skipping pipeline.")
+                if is_pipeline_running():
+                    log("Pipeline already running. Skipping.")
                     seen_rounds.add(r["id"])
                     continue
                 
-                log(f"Budget fresh ({used}/50). Launching pipeline!")
-                # Run pipeline
+                req2 = urllib.request.Request("https://api.ainm.no/astar-island/budget", headers=headers)
+                budget = json.loads(urllib.request.urlopen(req2, timeout=10).read())
+                used = budget.get("queries_used", 0)
+                
+                if used >= 45:
+                    log(f"Budget exhausted ({used}/50). Skipping.")
+                    seen_rounds.add(r["id"])
+                    continue
+                
+                log(f"Budget: {used}/50. Launching pipeline!")
+                
                 proc = subprocess.Popen(
-                    ["python3", "/tmp/astar_r9_cnn_pipeline.py"],
+                    ["/tmp/astar_venv/bin/python3", "/tmp/astar_shift_v2_pipeline.py"],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT
                 )
-                out, _ = proc.communicate(timeout=300)
-                log(f"Pipeline finished: exit={proc.returncode}")
-                log(out.decode()[-500:] if out else "no output")
+                # Write lock
+                with open(PIPELINE_LOCK, "w") as f:
+                    f.write(str(proc.pid))
                 
+                out, _ = proc.communicate(timeout=300)
+                
+                # Remove lock
+                try: os.remove(PIPELINE_LOCK)
+                except: pass
+                
+                log(f"Pipeline finished: exit={proc.returncode}")
+                if out: log(out.decode()[-300:])
                 seen_rounds.add(r["id"])
                 
-                # Also save GT for this round when it completes later
     except Exception as e:
         log(f"Error: {e}")
     
