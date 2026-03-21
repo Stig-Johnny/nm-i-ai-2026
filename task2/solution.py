@@ -3045,7 +3045,7 @@ def normalize_entities(entities):
         "paymentAmountNOK": ["paymentAmount", "paidAmountNOK", "paymentAmountNok", "invoiceAmountNok"],
         "exchangeDifferenceAccount": ["fxAccount", "currencyAccount", "gainLossAccount", "differenceAccount", "exchangeLossAccount", "exchangeGainAccount"],
         # Hours / timesheet
-        "hoursLogged": ["hourEntries", "timeEntries", "timeLogs", "hoursRecorded", "timesheet"],
+        "hoursLogged": ["hourEntries", "timeEntries", "timeLogs", "hoursRecorded", "hoursRegistration", "timesheet", "employeeHours", "workedHours"],
         # Transactions
         "bankTransactions": ["transactions", "entries", "bankEntries"],
         # General
@@ -3079,6 +3079,14 @@ def normalize_entities(entities):
         if v is not None and isinstance(v, (int, float, str)):
             if _re.search(r'(exchange|forex|currency).*(loss|gain|diff).*account', kl) and not e.get("exchangeDifferenceAccount"):
                 e["exchangeDifferenceAccount"] = v
+
+    # Regex fallback for hours/timesheet arrays
+    if not e.get("hoursLogged"):
+        for k, v in list(entities.items()):
+            if isinstance(v, list) and v and isinstance(v[0], dict) and _re.search(r'hour|time|log|registr', k.lower()):
+                if any('hours' in str(item) or 'employeeName' in str(item) for item in v):
+                    e["hoursLogged"] = v
+                    break
 
     # Also ensure employeeEmail from email
     if "employeeEmail" not in e:
@@ -3263,7 +3271,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2015"
+BUILD_VERSION = "v20260321-2025"
 
 @app.get("/health")
 def health():

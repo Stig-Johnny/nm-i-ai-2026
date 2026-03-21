@@ -901,6 +901,18 @@ def test_entity_normalizer_aliases():
     assert e2.get("exchangeDifferenceAccount") == 1930, "exchangeLossAccount → exchangeDifferenceAccount"
     assert e2.get("currencyGainNOK") == 500.0, "exchangeGainAmount → currencyGainNOK"
 
+    # Test hoursRegistration alias
+    e3 = normalize_entities({
+        "hoursRegistration": [{"employeeName": "Alice", "hours": 74}],
+    })
+    assert e3.get("hoursLogged") == [{"employeeName": "Alice", "hours": 74}], "hoursRegistration → hoursLogged"
+
+    # Test regex fallback for unknown hours key
+    e4 = normalize_entities({
+        "timeRegistrations": [{"employeeName": "Bob", "hours": 50}],
+    })
+    assert e4.get("hoursLogged") == [{"employeeName": "Bob", "hours": 50}], "timeRegistrations → hoursLogged (regex)"
+
 
 # ============================================================
 # Run
