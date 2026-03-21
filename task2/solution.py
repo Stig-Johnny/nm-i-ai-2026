@@ -206,9 +206,21 @@ def regex_parse(prompt):
             name_match = re.search(r'(?:navn|name|nombre|nom)\s+["\']?(\w[\w\s]*)', p)
             return {"task_type": "create_department", "entities": {"name": name_match.group(1).strip() if name_match else "Department"}}
 
-    # === REMINDER FEE (check before payment/invoice — mentions "invoice" + "reminder"/"purre") ===
-    if re.search(r'purregebyr|purring|rappel|mahngebühr|reminder.*fee|frais de rappel|forfalt|forfallen|overdue|retard|en retard|vencida', pl):
-        return None  # Complex task — delegate to LLM for proper extraction
+    # === COMPLEX TASKS — always delegate to LLM ===
+    # These tasks mention keywords that regex might misclassify (e.g. "faktura" in reminder, "betaling" in bank reconciliation)
+    complex_patterns = [
+        r'purregebyr|purring|rappel|mahngebühr|reminder.*fee|frais de rappel|forfalt|forfallen|overdue|retard|en retard|vencida',  # reminder fee
+        r'avstem|reconcil|abstimm|concili|rapprocher|bankutskrift|bank\s*statement|extrato\s*banc',  # bank reconciliation
+        r'reverser|reverse|stornieren|annuler|anular|reverter|devolvido|retourné|returned.*bank',  # reverse voucher
+        r'feil i hovedbok|errors? in.*ledger|fehler.*hauptbuch|errores.*libro.*mayor|erreurs.*grand.*livre|erros.*livro',  # ledger correction
+        r'årsoppgjør|year.end.*closing|jahresabschluss|cierre.*anual|clôture.*annuel|encerramento.*anual|månedsslutt|month.end.*closing|clôture.*mensuel|cierre.*mensual|encerramento.*mensal',  # year-end/month-end
+        r'analysier|analyse.*hauptbuch|analyze.*ledger|analise.*livro|trois.*comptes|three.*accounts|drei.*konten',  # ledger analysis
+        r'livssyklus|lifecycle|lebenszyklus|ciclo.*vida|cycle.*vie',  # project lifecycle
+        r'valutadifferanse|exchange.*rate.*differ|wechselkurs|tipo.*cambio|taux.*change|taxa.*câmbio|agio|disagio',  # currency payment
+    ]
+    for pat in complex_patterns:
+        if re.search(pat, pl):
+            return None  # Delegate to LLM
 
     # === PAYMENT (check before invoice — payment prompts also mention "invoice"/"faktura") ===
     if re.search(r'betaling|payment|zahlung|pago|paiement|pagamento', pl):
@@ -3239,7 +3251,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2100"
+BUILD_VERSION = "v20260321-2110"
 
 @app.get("/health")
 def health():
