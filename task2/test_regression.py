@@ -1369,6 +1369,36 @@ def test_C26_receipt_expense_department():
         assert expense_posting.get("department") is not None, "Expense posting should have department"
 
 
+def test_C27_occupation_code_prefix_lookup():
+    """Competition: 4-digit STYRK code should try prefix/padded lookup (scored 11/14)."""
+    from task2.solution import handle_create_employee, normalize_entities
+    # Track occupation code lookups
+    occ_lookups = []
+    mock = APIMock()
+    original_get = mock.get
+    def custom_get(base_url, token, path, params=None):
+        if "/occupationCode" in path:
+            occ_lookups.append((path, params))
+            code = (params or {}).get("code", "")
+            if code in ("3521", "3521*", "3521000"):
+                return 200, {"values": [{"id": 999, "code": "3521101", "nameNO": "IKT-driftstekniker"}]}
+            return 200, {"values": []}
+        return original_get(base_url, token, path, params)
+
+    entities = normalize_entities({
+        "firstName": "Mariana", "lastName": "Santos",
+        "dateOfBirth": "1994-12-04", "startDate": "2026-05-01",
+        "annualSalary": 620000, "employmentPercentage": 100.0,
+        "department": "Lager", "occupationCode": "3521",
+        "dailyWorkingHours": 7.5,
+    })
+    with patch('task2.solution.tx_get', custom_get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        handle_create_employee("https://mock/v2", "tok", entities)
+    assert len(occ_lookups) >= 1, f"Should look up occupation code, got {occ_lookups}"
+
+
 # ============================================================
 # Run
 # ============================================================

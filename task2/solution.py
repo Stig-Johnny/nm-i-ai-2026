@@ -770,16 +770,28 @@ def handle_create_employee(base_url, token, e):
                     det_body["annualSalary"] = salary
                 occ_code = e.get("occupationCode") or e.get("occupationalCode") or e.get("positionCode") or e.get("styrk") or e.get("stillingskode")
                 if occ_code:
-                    # Look up occupation code — try by code first (if numeric), then by name
+                    # Look up occupation code — STYRK codes are 7-digit but LLM often returns 4-digit prefix
                     occ_vals = []
-                    if str(occ_code).isdigit():
+                    occ_str = str(occ_code).strip()
+                    if occ_str.isdigit():
+                        # Try exact code first
                         _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
-                                            {"code": str(occ_code), "count": 1})
+                                            {"code": occ_str, "count": 1})
                         occ_vals = occ_resp.get("values", [])
+                        # If no match and code is short (4-digit STYRK prefix), try as prefix
+                        if not occ_vals and len(occ_str) <= 4:
+                            _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
+                                                {"code": occ_str + "*", "count": 1})
+                            occ_vals = occ_resp.get("values", [])
+                        # Also try with trailing zeros
+                        if not occ_vals and len(occ_str) <= 4:
+                            padded = occ_str + "0" * (7 - len(occ_str))
+                            _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
+                                                {"code": padded, "count": 1})
+                            occ_vals = occ_resp.get("values", [])
                     if not occ_vals:
                         _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
-                                            {"nameNO": str(occ_code), "count": 1})
-                        occ_vals = occ_resp.get("values", [])
+                                            {"nameNO": occ_str, "count": 1})
                         occ_vals = occ_resp.get("values", [])
                     if occ_vals:
                         det_body["occupationCode"] = {"id": occ_vals[0]["id"]}
@@ -3360,7 +3372,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0010"
+BUILD_VERSION = "v20260322-0020"
 
 @app.get("/health")
 def health():
