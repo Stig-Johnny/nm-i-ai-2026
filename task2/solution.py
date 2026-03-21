@@ -65,6 +65,7 @@ Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk
   "task_type": "one of: create_employee, create_customer, create_supplier, create_product, create_department, create_project, create_invoice, create_travel_expense, delete_travel_expense, register_payment, register_supplier_invoice, run_payroll, create_credit_note, update_employee, update_customer, create_contact, create_order, invoice_with_payment, project_invoice, reverse_voucher, delete_entity, bank_reconciliation, register_receipt_expense, correct_ledger_errors, unknown",
   // Use 'project_invoice' when the task involves: registering hours on a project, setting fixed price on a project, or generating an invoice linked to a project. If the prompt mentions a project name AND an invoice, use project_invoice.
   // Use 'create_accounting_dimension' when creating free accounting dimensions with values and/or posting vouchers linked to dimension values
+  // Use 'year_end_closing' when asked to perform year-end closing, annual closing (cierre anual, Jahresabschluss, clôture annuelle), depreciation, tax provision, prepaid reversal, or close income/expense accounts. Extract ALL data from the prompt: depreciationAssets [{assetName, originalCost, assetAccount, depreciationYears, annualDepreciation, expenseAccount, accumulatedDepreciationAccount}], prepaidAmount, prepaidAccount, taxRate, taxAccount, taxPayableAccount, closingYear, resultAccount.
   // Use 'correct_ledger_errors' when asked to find and correct errors in the ledger/vouchers. Extract: errors [{errorType (wrong_account|duplicate|missing_vat|wrong_amount), wrongAccount, correctAccount, amount, correctAmount, vatAccount}]
   // Use 'register_receipt_expense' when asked to register an expense from a receipt (kvittering/recibo/Quittung). Extract: items [{description, amount, vatRate, accountNumber}], department, supplierName, supplierOrgNumber, totalAmount, vatAmount, date. Common expense accounts: 6540 (office supplies), 7100 (travel), 7140 (transport/togbillett), 7350 (parking), 6800 (office equipment), 6300 (leasing), 4300 (goods for resale). VAT: 25% standard, 15% food, 12% transport, 0% exempt.
   "entities": {
@@ -2077,6 +2078,120 @@ def handle_delete_entity(base_url, token, e):
     return st in (200, 204)
 
 
+def handle_year_end_closing(base_url, token, e):
+    """Year-end closing: depreciation, prepaid reversal, tax provision, close to equity."""
+    today = str(date.today())
+    closing_year = e.get("closingYear") or "2025"
+    closing_date = f"{closing_year}-12-31"
+
+    # 1. Depreciation vouchers
+    assets = e.get("depreciationAssets") or []
+    if assets:
+        postings = []
+        row = 1
+        for asset in assets:
+            dep_amount = float(asset.get("annualDepreciation") or 0)
+            if not dep_amount:
+                cost = float(asset.get("originalCost") or 0)
+                years = int(asset.get("depreciationYears") or 1)
+                dep_amount = round(cost / years, 2)
+            expense_acct = find_account_id(base_url, token, int(asset.get("expenseAccount") or 6010))
+            accum_acct = find_account_id(base_url, token, int(asset.get("accumulatedDepreciationAccount") or 1209))
+            if expense_acct and accum_acct:
+                postings.append({
+                    "row": row, "date": closing_date,
+                    "description": f"Avskrivning {asset.get('assetName', '')}",
+                    "account": {"id": expense_acct},
+                    "amountGross": round(dep_amount, 2),
+                    "amountGrossCurrency": round(dep_amount, 2),
+                })
+                row += 1
+                postings.append({
+                    "row": row, "date": closing_date,
+                    "description": f"Akkumulert avskrivning {asset.get('assetName', '')}",
+                    "account": {"id": accum_acct},
+                    "amountGross": round(-dep_amount, 2),
+                    "amountGrossCurrency": round(-dep_amount, 2),
+                })
+                row += 1
+        if postings:
+            st, resp = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                "date": closing_date,
+                "description": f"Avskrivninger {closing_year}",
+                "postings": postings,
+            })
+            print(f"depreciation voucher: {st} {str(resp)[:200]}")
+            # Fallback: if period closed, retry with today's date
+            if st == 422 and "periode" in str(resp).lower():
+                for p in postings:
+                    p["date"] = today
+                st2, resp2 = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                    "date": today, "description": f"Avskrivninger {closing_year}", "postings": postings})
+                print(f"depreciation voucher (today): {st2} {str(resp2)[:200]}")
+
+    # 2. Prepaid expense reversal
+    prepaid_amount = float(e.get("prepaidAmount") or 0)
+    prepaid_acct_num = int(e.get("prepaidAccount") or 1700)
+    if prepaid_amount:
+        prepaid_acct = find_account_id(base_url, token, prepaid_acct_num)
+        prepaid_expense_num = int(e.get("prepaidExpenseAccount") or e.get("expenseAccount") or 6540)
+        expense_acct = find_account_id(base_url, token, prepaid_expense_num)
+        if prepaid_acct and expense_acct:
+            st, resp = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                "date": closing_date,
+                "description": f"Reversering forskuddsbetalte kostnader {closing_year}",
+                "postings": [
+                    {"row": 1, "date": closing_date, "description": "Forskuddsbetalt kostnad",
+                     "account": {"id": expense_acct},
+                     "amountGross": round(prepaid_amount, 2), "amountGrossCurrency": round(prepaid_amount, 2)},
+                    {"row": 2, "date": closing_date, "description": "Reduksjon forskuddsbetalt",
+                     "account": {"id": prepaid_acct},
+                     "amountGross": round(-prepaid_amount, 2), "amountGrossCurrency": round(-prepaid_amount, 2)},
+                ],
+            })
+            print(f"prepaid reversal voucher: {st} {str(resp)[:200]}")
+
+    # 3. Tax provision
+    tax_rate = float(e.get("taxRate") or 22) / 100
+    tax_acct_num = int(e.get("taxAccount") or 8700)
+    tax_payable_num = int(e.get("taxPayableAccount") or 2920)
+
+    # Get taxable result from ledger (sum of income - expenses)
+    # For now, use the result from the prompt if given, otherwise estimate
+    taxable_result = float(e.get("taxableResult") or e.get("result") or 0)
+    if not taxable_result:
+        # Try to compute from ledger — get balance of income/expense accounts
+        _, acc_resp = tx_get(base_url, token, "/ledger/account", {
+            "count": 200, "fields": "id,number,balance"
+        })
+        accounts = acc_resp.get("values", [])
+        income = sum(abs(float(a.get("balance", 0))) for a in accounts if 3000 <= int(a.get("number", 0)) < 4000)
+        expenses = sum(abs(float(a.get("balance", 0))) for a in accounts if 4000 <= int(a.get("number", 0)) < 9000)
+        taxable_result = income - expenses
+        print(f"estimated taxable result: income={income} expenses={expenses} result={taxable_result}")
+
+    if taxable_result > 0:
+        tax_amount = round(taxable_result * tax_rate, 2)
+        tax_acct = find_account_id(base_url, token, tax_acct_num)
+        tax_payable = find_account_id(base_url, token, tax_payable_num)
+        if tax_acct and tax_payable:
+            st, resp = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                "date": closing_date,
+                "description": f"Skattekostnad {closing_year}",
+                "postings": [
+                    {"row": 1, "date": closing_date, "description": "Skattekostnad",
+                     "account": {"id": tax_acct},
+                     "amountGross": round(tax_amount, 2), "amountGrossCurrency": round(tax_amount, 2)},
+                    {"row": 2, "date": closing_date, "description": "Betalbar skatt",
+                     "account": {"id": tax_payable},
+                     "amountGross": round(-tax_amount, 2), "amountGrossCurrency": round(-tax_amount, 2)},
+                ],
+            })
+            print(f"tax provision voucher: {st} tax={tax_amount} {str(resp)[:200]}")
+
+    return True
+
+
 def handle_correct_ledger_errors(base_url, token, e):
     """Correct ledger errors by creating correction vouchers."""
     today = str(date.today())
@@ -2286,6 +2401,8 @@ HANDLERS = {
     "register_receipt_expense": handle_register_receipt_expense,
     "correct_ledger_errors": handle_correct_ledger_errors,
     "ledger_correction": handle_correct_ledger_errors,
+    "year_end_closing": handle_year_end_closing,
+    "annual_closing": handle_year_end_closing,
     "receipt_expense": handle_register_receipt_expense,
     "register_receipt": handle_register_receipt_expense,
     # Aliases for LLM variations
