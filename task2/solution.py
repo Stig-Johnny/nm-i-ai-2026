@@ -239,19 +239,19 @@ def regex_parse(prompt):
     # === INVOICE (check before customer — invoices mention customers but are invoices) ===
     # Exclude "faktura" appearing only in email addresses
     invoice_text = re.sub(r'[\w.+-]+@[\w.-]+', '', pl)  # Remove emails before checking
-    if re.search(r'faktura|invoice|rechnung|factura|facture', invoice_text):
+    if re.search(r'faktura|fatura|invoice|rechnung|factura|facture', invoice_text):
         if re.search(r'kreditnota|credit\s*note|gutschrift|nota\s+de\s+crédito', pl):
             return {"task_type": "create_credit_note", "entities": {}}
         # Supplier invoice (incoming)
-        if re.search(r'leverandør|supplier|lieferant', pl) and re.search(r'mottatt|received|erhalten|recibido|reçu|registrer.*faktura', pl):
-            supplier_name = find_name_after(p, 'leverandøren', 'Lieferanten', 'supplier', 'fournisseur', 'proveedor')
+        if re.search(r'leverandør|supplier|lieferant|fornecedor|fournisseur|proveedor', pl) and re.search(r'mottatt|received|erhalten|recibido|reçu|recebemos|registrer.*faktura|registre.*fatura', pl):
+            supplier_name = find_name_after(p, 'leverandøren', 'Lieferanten', 'supplier', 'fournisseur', 'proveedor', 'fornecedor')
             org = find_org(p)
             inv_match = re.search(r'(INV[\w-]+)', p)
             total = find_amount(p, 'på', 'von', 'of', 'de')
             vat_match = re.search(r'(\d+)\s*%', p)
             vat_rate = int(vat_match.group(1)) if vat_match else 25
-            acct_match = re.search(r'konto\s+(\d{4})|account\s+(\d{4})|Konto\s+(\d{4})', p, re.I)
-            acct = int((acct_match.group(1) or acct_match.group(2) or acct_match.group(3))) if acct_match else 6540
+            acct_match = re.search(r'konto\s+(\d{4})|account\s+(\d{4})|Konto\s+(\d{4})|conta\s+(\d{4})|compte\s+(\d{4})|cuenta\s+(\d{4})', p, re.I)
+            acct = int(next(g for g in acct_match.groups() if g)) if acct_match else 6540
             net = total / (1 + vat_rate / 100) if total else 0
             return {
                 "task_type": "register_supplier_invoice",
@@ -294,11 +294,11 @@ def regex_parse(prompt):
 
     # === PAYROLL ===
     # NO: lønn, EN: payroll, DE: gehalt, ES: nómina, FR: salaire, PT: salário, SV: lön
-    if re.search(r'lønn|payroll|gehalt|nómina|salaire|lön|salário|processe o salário', pl):
+    if re.search(r'lønn|løn|payroll|gehalt|nómina|salaire|lön|salário|processe o salário', pl):
         emp_name = find_name_after(p, 'for', 'für', 'para', 'pour', 'de', 'av')
         email = find_email(p)
         # NO: grunnlønn, EN: base salary, DE: grundgehalt, ES: salario base, FR: salaire de base, PT: salário base, SV: grundlön
-        base = find_amount(p, 'grunnlønn', 'base salary', 'grundgehalt', 'salario base', 'salário base', 'salaire de base', 'grundlön')
+        base = find_amount(p, 'grunnlønn', 'grunnløn', 'base salary', 'grundgehalt', 'salario base', 'salário base', 'salaire de base', 'grundlön')
         # NO: bonus/engangsbonus, EN: bonus, DE: bonus/einmalbonus, ES: bonificación, FR: prime/bonus, PT: bónus, SV: bonus
         bonus = find_amount(p, 'bonus', 'engangsbonus', 'einmalbonus', 'bonificación', 'prime', 'bónus')
         # Avoid grabbing base salary as bonus
@@ -323,14 +323,14 @@ def regex_parse(prompt):
         }
 
     # === EMPLOYEE ===
-    if re.search(r'ansatt|employee|mitarbeiter|empleado|employé|empregado|medarbeider', pl):
+    if re.search(r'ansatt|employee|mitarbeiter|empleado|employé|empregado|funcionário|medarbeider|tilsette', pl):
         # Extract name — look for "namens X", "named X", "navn X", etc
         name = find_name_after(p, 'namens', 'named', 'kalt', 'llamado', 'nommé', 'chamado')
         if not name:
             name = find_name_after(p, 'Mitarbeiter', 'employee', 'ansatt')
         first, last = split_name(name) if name else ("", "")
         email = find_email(p)
-        dob_match = re.search(r'(?:geboren|born|født|nacido|né)\s+(?:am|on|den|el|le)?\s*(\d{1,2})\.?\s*(\w+)\s+(\d{4})', p, re.I)
+        dob_match = re.search(r'(?:geboren|born|født|nacido|nascido|né)\s+(?:am|on|den|el|le|em)?\s*(\d{1,2})\.?\s*(\w+)\s+(\d{4})', p, re.I)
         dob = None
         if dob_match:
             months = {"januar":1,"february":2,"februar":2,"march":3,"mars":3,"märz":3,"april":4,"mai":5,"may":5,"juni":6,"june":6,"juli":7,"july":7,"august":8,"september":9,"oktober":10,"october":10,"november":11,"desember":12,"december":12,"dezember":12}
@@ -339,7 +339,7 @@ def regex_parse(prompt):
             month = months.get(month_str, 1)
             year = int(dob_match.group(3))
             dob = f"{year}-{month:02d}-{day:02d}"
-        start_match = re.search(r'(?:startdato|start\s*date|Startdatum|fecha\s+de\s+inicio)\s+(\d{1,2})\.?\s*(\w+)\s+(\d{4})', p, re.I)
+        start_match = re.search(r'(?:startdato|start\s*date|Startdatum|fecha\s+de\s+inicio|data\s+de\s+início|date\s+de\s+début)\s+(\d{1,2})\.?\s*(\w+)\s+(\d{4})', p, re.I)
         start_date = None
         if start_match:
             months = {"januar":1,"february":2,"februar":2,"march":3,"mars":3,"märz":3,"april":4,"mai":5,"may":5,"juni":6,"june":6,"juli":7,"july":7,"august":8,"september":9,"oktober":10,"october":10,"november":11,"desember":12,"december":12,"dezember":12}
@@ -3331,7 +3331,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2310"
+BUILD_VERSION = "v20260321-2330"
 
 @app.get("/health")
 def health():

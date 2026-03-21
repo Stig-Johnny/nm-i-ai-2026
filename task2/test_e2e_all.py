@@ -268,6 +268,192 @@ TESTS = [
             and p["entities"]["bonus"] == 13750.0
         ),
     },
+    # --- REGISTER PAYMENT (multilingual) ---
+    {
+        "prompt": "The customer Windmill Ltd (org no. 830362894) has an outstanding invoice for 32200 NOK excluding VAT for \"System Development\". Register full payment on this invoice.",
+        "task_type": "register_payment",
+        "checks": lambda p, m: (
+            p["entities"]["amount"] == 32200.0
+            and p["entities"]["customerOrgNumber"] == "830362894"
+        ),
+    },
+    {
+        "prompt": "O cliente Floresta Lda (org. nº 906739542) tem uma fatura pendente de 6800 NOK sem IVA por \"Consultoria de dados\". Registe o pagamento total desta fatura.",
+        "task_type": "register_payment",
+        "checks": lambda p, m: (
+            p["entities"]["amount"] == 6800.0
+            and p["entities"]["customerOrgNumber"] == "906739542"
+        ),
+    },
+
+    # --- REGISTER SUPPLIER INVOICE (multilingual) ---
+    {
+        "prompt": "Vi har mottatt faktura INV-2026-9382 fra leverandøren Stormberg AS (org.nr 877462137) på 61600 kr inklusiv MVA. Beløpet gjelder kontortjenester (konto 6540). Registrer leverandørfakturaen med korrekt inngående MVA (25 %).",
+        "task_type": "register_supplier_invoice",
+        "checks": lambda p, m: (
+            p["entities"]["invoiceNumber"] == "INV-2026-9382"
+            and p["entities"]["totalAmountInclVat"] == 61600.0
+            and p["entities"]["vatRate"] == 25
+            and p["entities"]["accountNumber"] == 6540
+        ),
+    },
+    {
+        "prompt": "Wir haben die Rechnung INV-2026-8810 vom Lieferanten Sonnental GmbH (Org.-Nr. 988926221) über 8050 NOK einschließlich MwSt. erhalten. Der Betrag betrifft Bürodienstleistungen (Konto 6540). Registrieren Sie die Lieferantenrechnung mit korrekter Vorsteuer (25 %).",
+        "task_type": "register_supplier_invoice",
+        "checks": lambda p, m: (
+            p["entities"]["invoiceNumber"] == "INV-2026-8810"
+            and p["entities"]["totalAmountInclVat"] == 8050.0
+            and p["entities"]["accountNumber"] == 6540
+        ),
+    },
+    {
+        "prompt": "Recebemos a fatura INV-2026-5787 do fornecedor Luz do Sol Lda (org. nº 945810149) no valor de 35950 NOK com IVA incluído. O montante refere-se a serviços de escritório (conta 6540). Registe a fatura do fornecedor com o IVA dedutível correto (25 %).",
+        "task_type": "register_supplier_invoice",
+        "checks": lambda p, m: (
+            p["entities"]["invoiceNumber"] == "INV-2026-5787"
+            and p["entities"]["totalAmountInclVat"] == 35950.0
+            and p["entities"]["accountNumber"] == 6540
+        ),
+    },
+
+    # --- CREATE INVOICE (multilingual) ---
+    {
+        "prompt": "Crea y envía una factura al cliente Luna SL (org. nº 844920520) por 20200 NOK sin IVA. La factura es por Servicio de red.",
+        "task_type": "create_invoice",
+        "checks": lambda p, m: (
+            p["entities"]["customerOrgNumber"] == "844920520"
+            and p["entities"]["lines"][0]["unitPrice"] == 20200.0
+        ),
+    },
+
+    # --- CREATE CUSTOMER (multilingual) ---
+    {
+        "prompt": "Create the customer Greenfield Ltd with organization number 872154442. The address is Sjøgata 85, 7010 Trondheim. Email: post@greenfield.no.",
+        "task_type": "create_customer",
+        "checks": lambda p, m: (
+            posts(m, "/customer")[0][2].get("name") == "Greenfield Ltd"
+            and posts(m, "/customer")[0][2].get("organizationNumber") == "872154442"
+            and posts(m, "/customer")[0][2].get("email") == "post@greenfield.no"
+        ),
+    },
+    {
+        "prompt": "Crea el cliente Río Verde SL con número de organización 993179469. La dirección es Nygata 91, 3015 Drammen. Correo: post@rio.no.",
+        "task_type": "create_customer",
+        "checks": lambda p, m: (
+            posts(m, "/customer")[0][2].get("name") == "Río Verde SL"
+            and posts(m, "/customer")[0][2].get("organizationNumber") == "993179469"
+        ),
+    },
+
+    # --- CREATE PRODUCT (multilingual) ---
+    {
+        "prompt": "Create the product \"Training Session\" with product number 2451. The price is 20350 NOK excluding VAT, using the standard 25% VAT rate.",
+        "task_type": "create_product",
+        "checks": lambda p, m: (
+            posts(m, "/product")[0][2].get("name") == "Training Session"
+            and str(posts(m, "/product")[0][2].get("number")) == "2451"
+        ),
+    },
+    {
+        "prompt": "Opprett produktet \"Analyserapport\" med produktnummer 1908. Prisen er 18050 kr eksklusiv MVA, og standard MVA-sats på 25 % skal nyttast.",
+        "task_type": "create_product",
+        "checks": lambda p, m: (
+            posts(m, "/product")[0][2].get("name") == "Analyserapport"
+            and str(posts(m, "/product")[0][2].get("number")) == "1908"
+        ),
+    },
+
+    # --- CREATE DEPARTMENT (multilingual) ---
+    {
+        "prompt": "Create three departments in Tripletex: \"Drift\", \"Innkjøp\", and \"Salg\".",
+        "task_type": "create_department",
+        "checks": lambda p, m: len(posts(m, "/department")) == 3,
+    },
+    {
+        "prompt": "Crie três departamentos no Tripletex: \"Økonomi\", \"Innkjøp\" e \"Regnskap\".",
+        "task_type": "create_department",
+        "checks": lambda p, m: len(posts(m, "/department")) == 3,
+    },
+    {
+        "prompt": "Erstellen Sie drei Abteilungen in Tripletex: \"Utvikling\", \"Innkjøp\" und \"Økonomi\".",
+        "task_type": "create_department",
+        "checks": lambda p, m: len(posts(m, "/department")) == 3,
+    },
+
+    # --- CREATE EMPLOYEE (multilingual) ---
+    {
+        "prompt": "Temos um novo funcionário chamado Inês Almeida, nascido em 13. February 1990. Crie-o como funcionário com o e-mail ines.almeida@example.org e data de início 1. April 2026.",
+        "task_type": "create_employee",
+        "checks": lambda p, m: (
+            posts(m, "/employee")[0][2].get("firstName") == "Inês"
+            and posts(m, "/employee")[0][2].get("lastName") == "Almeida"
+            and posts(m, "/employee")[0][2].get("email") == "ines.almeida@example.org"
+        ),
+    },
+
+    # --- PAYROLL (more languages) ---
+    {
+        "prompt": "Run payroll for Victoria Lewis (victoria.lewis@example.org) for this month. The base salary is 52050 NOK. Add a one-time bonus of 7200 NOK on top of the base salary.",
+        "task_type": "run_payroll",
+        "checks": lambda p, m: (
+            p["entities"]["baseSalary"] == 52050.0
+            and p["entities"]["bonus"] == 7200.0
+        ),
+    },
+    {
+        "prompt": "Køyr løn for Gunnhild Aasen (gunnhild.aasen@example.org) for denne månaden. Grunnløn er 51800 kr. Legg til ein eingongsbonus på 5700 kr i tillegg til grunnløna.",
+        "task_type": "run_payroll",
+        "checks": lambda p, m: (
+            p["entities"]["baseSalary"] == 51800.0
+            and p["entities"]["bonus"] == 5700.0
+        ),
+    },
+    {
+        "prompt": "Processe o salário de Ana Ferreira (ana.ferreira@example.org) para este mês. O salário base é de 41750 NOK. Adicione um bónus único de 6750 NOK além do salário base.",
+        "task_type": "run_payroll",
+        "checks": lambda p, m: (
+            p["entities"]["baseSalary"] == 41750.0
+            and p["entities"]["bonus"] == 6750.0
+        ),
+    },
+
+    # --- SUPPLIER (more languages) ---
+    {
+        "prompt": "Registrer leverandøren Bergvik AS med organisasjonsnummer 852000139. E-post: faktura@bergvik.no.",
+        "task_type": "create_supplier",
+        "checks": lambda p, m: (
+            posts(m, "/supplier")[0][2].get("name") == "Bergvik AS"
+            and posts(m, "/supplier")[0][2].get("email") == "faktura@bergvik.no"
+        ),
+    },
+    {
+        "prompt": "Enregistrez le fournisseur Rivière SARL avec le numéro d'organisation 853420409. E-mail : faktura@riviresarl.no.",
+        "task_type": "create_supplier",
+        "checks": lambda p, m: (
+            posts(m, "/supplier")[0][2].get("name") == "Rivière SARL"
+            and posts(m, "/supplier")[0][2].get("organizationNumber") == "853420409"
+        ),
+    },
+
+    # --- COMPLEX TASKS (go to LLM) ---
+    {
+        "prompt": "El cliente Luna SL (org. nº 982580110) ha reclamado sobre la factura por \"Almacenamiento en la nube\" (31750 NOK sin IVA). Emita una nota de crédito completa que revierta la factura original.",
+        "task_type": "create_credit_note",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+    {
+        "prompt": "Vi sendte en faktura på 4644 EUR til Stormberg AS (org.nr 917157812) da kursen var 11.51 NOK/EUR. Kunden har nå betalt, men kursen er 10.84 NOK/EUR. Registrer betalingen med korrekt valutadifferanse.",
+        "task_type": "currency_payment",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+    {
+        "prompt": "En av kundene dine har en forfalt faktura. Finn den forfalte fakturaen og bokfør et purregebyr pa 55 kr. Debet kundefordringer (1500), kredit purregebyr (3400).",
+        "task_type": "reminder_fee",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
 ]
 
 
