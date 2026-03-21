@@ -1215,9 +1215,10 @@ def handle_run_payroll(base_url, token, e):
     if not existing_employment:
         emp_body = {
             "employee": {"id": emp_id},
-            "startDate": "2024-01-01",
-            "employmentType": "ORDINARY",
-            "remunerationType": "MONTHLY_WAGE",
+            "startDate": e.get("startDate") or "2024-01-01",
+            # Swagger: Employment has no employmentType/remunerationType fields
+            "isMainEmployer": True,
+            "taxDeductionCode": "loennFraHovedarbeidsgiver",
         }
         st_e, resp_e = tx_post(base_url, token, "/employee/employment", emp_body)
         employment_id = resp_e.get("value", {}).get("id")
