@@ -252,15 +252,17 @@ def regex_parse(prompt):
         }
 
     # === PAYROLL ===
-    if re.search(r'lønn|payroll|gehalt|nómina|salaire|lön', pl):
-        emp_name = find_name_after(p, 'for', 'für', 'para', 'pour')
+    # NO: lønn, EN: payroll, DE: gehalt, ES: nómina, FR: salaire, PT: salário, SV: lön
+    if re.search(r'lønn|payroll|gehalt|nómina|salaire|lön|salário|processe o salário', pl):
+        emp_name = find_name_after(p, 'for', 'für', 'para', 'pour', 'de', 'av')
         email = find_email(p)
-        base = find_amount(p, 'grunnlønn', 'base salary', 'grundgehalt', 'salario base')
-        bonus = find_amount(p, 'bonus', 'engangsbonus')
+        # NO: grunnlønn, EN: base salary, DE: grundgehalt, ES: salario base, FR: salaire de base, PT: salário base, SV: grundlön
+        base = find_amount(p, 'grunnlønn', 'base salary', 'grundgehalt', 'salario base', 'salário base', 'salaire de base', 'grundlön')
+        # NO: bonus/engangsbonus, EN: bonus, DE: bonus/einmalbonus, ES: bonificación, FR: prime/bonus, PT: bónus, SV: bonus
+        bonus = find_amount(p, 'bonus', 'engangsbonus', 'einmalbonus', 'bonificación', 'prime', 'bónus')
         # Avoid grabbing base salary as bonus
         if bonus and base and bonus == base:
-            # Re-extract bonus specifically
-            bonus_match = re.search(r'(?:bonus|engangsbonus)[^\d]*(\d[\d\s]*)\s*(?:kr|NOK)', p, re.I)
+            bonus_match = re.search(r'(?:bonus|engangsbonus|einmalbonus|bonificación|prime|bónus)[^\d]*(\d[\d\s]*)\s*(?:kr|NOK)', p, re.I)
             bonus = float(bonus_match.group(1).replace(' ', '')) if bonus_match else 0
         return {
             "task_type": "run_payroll",
@@ -609,21 +611,22 @@ def handle_create_supplier(base_url, token, e):
     if email:
         body["email"] = email
         body["invoiceEmail"] = email
+        body["overdueNoticeEmail"] = email
     org = e.get("organizationNumber") or e.get("supplierOrgNumber") or e.get("orgNumber")
     if org: body["organizationNumber"] = org
-    if "phone" in e or "phoneNumber" in e:
-        body["phoneNumber"] = e.get("phone") or e.get("phoneNumber")
+    phone = e.get("phone") or e.get("phoneNumber")
+    if phone:
+        body["phoneNumber"] = phone
 
     addr = e.get("address") or e.get("physicalAddress") or {}
-    if addr:
-        addr_obj = {
-            "addressLine1": addr.get("street") or addr.get("addressLine1", ""),
-            "postalCode": addr.get("postalCode", ""),
-            "city": addr.get("city", ""),
-            "country": {"id": 161},
-        }
-        body["physicalAddress"] = addr_obj
-        body["postalAddress"] = addr_obj
+    addr_obj = {
+        "addressLine1": addr.get("street") or addr.get("addressLine1", ""),
+        "postalCode": addr.get("postalCode", ""),
+        "city": addr.get("city", ""),
+        "country": {"id": 161},
+    }
+    body["physicalAddress"] = addr_obj
+    body["postalAddress"] = addr_obj
 
     st, resp = tx_post(base_url, token, "/supplier", body)
     print(f"create_supplier: {st} {str(resp)[:200]}")
@@ -903,12 +906,91 @@ def handle_create_travel_expense(base_url, token, e):
     pt_list = pts.get("values", [])
     pt_id = pt_list[0]["id"] if pt_list else None
 
-    # Add cost lines
-    expenses = list(e.get("expenses", []))
+    # Register per diem compensation if diet info provided
     diet = e.get("diet", {})
     if diet and (diet.get("total") or (diet.get("dailyRate") and diet.get("days"))):
-        total = diet.get("total") or (diet.get("dailyRate", 0) * diet.get("days", 0))
-        expenses.insert(0, {"description": "Diett", "amount": total})
+        diet_days = int(diet.get("days", 1))
+        # Look up per diem rate categories
+        # Look up rate categories AND rate types
+        _, rc_resp = tx_get(base_url, token, "/travelExpense/rateCategory", {"count": 50, "fields": "id,name,type,isValidDayTrip,isValidDomestic"})
+        rate_cats = rc_resp.get("values", [])
+        per_diem_cat = None
+        for rc in rate_cats:
+            if rc.get("type") == "PER_DIEM" and rc.get("isValidDomestic"):
+                per_diem_cat = rc
+                break
+        if not per_diem_cat:
+            for rc in rate_cats:
+                if rc.get("type") == "PER_DIEM":
+                    per_diem_cat = rc
+                    break
+        print(f"  rateCategories: {[(r['id'], r.get('name',''), r.get('type','')) for r in rate_cats[:5]]}")
+
+        # Also get rate types for this category
+        rate_type_id = None
+        if per_diem_cat:
+            _, rt_resp = tx_get(base_url, token, "/travelExpense/rate", {"rateCategoryId": per_diem_cat["id"], "count": 10, "fields": "id,rate,zone"})
+            rate_types = rt_resp.get("values", [])
+            if rate_types:
+                rate_type_id = rate_types[0]["id"]
+            print(f"  rateTypes for cat {per_diem_cat['id']}: {[(r['id'], r.get('rate',''), r.get('zone','')) for r in rate_types[:5]]}")
+
+        if per_diem_cat:
+            # Tripletex derives `count` (days) from startDate/endDate — don't set count directly
+            pd_start = e.get("startDate") or e.get("date") or today
+            # endDate = startDate + (days - 1)
+            from datetime import date as _date, timedelta as _td
+            try:
+                pd_start_dt = _date.fromisoformat(pd_start)
+            except Exception:
+                pd_start_dt = _date.today()
+            pd_end_dt = pd_start_dt + _td(days=max(diet_days - 1, 0))
+            pd_end = pd_end_dt.isoformat()
+
+            overnight = "NONE"
+            if travel_days > 1:
+                overnight = "HOTEL"  # default to HOTEL for multi-day trips
+            if e.get("accommodation") and "town" in str(e.get("accommodation")).lower():
+                overnight = "TOWN_ACCOMMODATION"
+
+            pd_body = {
+                "travelExpense": {"id": te_id},
+                "rateCategory": {"id": per_diem_cat["id"]},
+                "countryCode": "NO",
+                "overnightAccommodation": overnight,
+                "location": destination or "Norge",
+                "startDate": pd_start,
+                "endDate": pd_end,
+                # DO NOT set count — Tripletex derives it from startDate/endDate
+                "isDeductionForBreakfast": False,
+                "isDeductionForLunch": False,
+                "isDeductionForDinner": False,
+            }
+            if rate_type_id:
+                pd_body["rateType"] = {"id": rate_type_id}
+            st_pd, resp_pd = tx_post(base_url, token, "/travelExpense/perDiemCompensation", pd_body)
+            print(f"  perDiemCompensation: {st_pd} {str(resp_pd)[:500]}")
+            if st_pd not in (200, 201):
+                # Fallback: add diet as a cost line
+                print("  perDiem failed, falling back to cost line for diet")
+                diet_total = diet.get("total") or (diet.get("dailyRate", 0) * diet.get("days", 0))
+                diet_cat_id = find_cat("diett", "kost", "mat")
+                if not diet_cat_id:
+                    diet_cat_id = list(cat_map.keys())[0] if cat_map else None
+                if diet_cat_id:
+                    cost_body = {
+                        "travelExpense": {"id": te_id},
+                        "costCategory": {"id": diet_cat_id},
+                        "date": e.get("date", today),
+                        "amountCurrencyIncVat": float(diet_total),
+                    }
+                    if pt_id:
+                        cost_body["paymentType"] = {"id": pt_id}
+                    st_c, _ = tx_post(base_url, token, "/travelExpense/cost", cost_body)
+                    print(f"  cost 'diett' {diet_total}: {st_c}")
+
+    # Add cost lines for actual expenses (flight, taxi, hotel, etc.)
+    expenses = list(e.get("expenses", []))
 
     for exp in expenses:
         desc = exp.get("description", "").lower()
@@ -947,9 +1029,9 @@ def handle_create_travel_expense(base_url, token, e):
         st_c, cr = tx_post(base_url, token, "/travelExpense/cost", cost_body)
         print(f"  cost '{desc}' {amt}: {st_c}")
 
-    # Deliver the travel expense
-    st_del, _ = tx_put(base_url, token, f"/travelExpense/:deliver", params={"id": te_id})
-    print(f"deliver travel expense: {st_del}")
+    # Deliver the travel expense — ID in path, not query param
+    st_del, resp_del = tx_put(base_url, token, f"/travelExpense/{te_id}/:deliver", {})
+    print(f"deliver travel expense: {st_del} {str(resp_del)[:300] if st_del not in (200,204) else ''}")
 
     return True
 
@@ -1457,23 +1539,79 @@ def handle_invoice_with_payment(base_url, token, e):
 
 
 def handle_reverse_voucher(base_url, token, e):
-    """Reverse a voucher — Tier 2/3."""
+    """Reverse a voucher — find the specific payment voucher, then reverse it."""
     today = str(date.today())
+    description = e.get("description") or e.get("invoiceDescription") or e.get("invoiceReference") or ""
+    cust_name = e.get("customerName") or e.get("name") or e.get("supplierName") or ""
+    cust_org = e.get("customerOrgNumber") or e.get("organizationNumber") or e.get("supplierOrgNumber") or ""
 
-    # Find voucher to reverse
+    # Strategy 1: Find the payment voucher via invoice
+    # First find customer
+    customer_id = None
+    if cust_org:
+        _, c_resp = tx_get(base_url, token, "/customer", {"organizationNumber": cust_org, "fields": "id,name", "count": 1})
+        vals = c_resp.get("values", [])
+        if vals:
+            customer_id = vals[0]["id"]
+    if not customer_id and cust_name:
+        _, c_resp = tx_get(base_url, token, "/customer", {"fields": "id,name", "count": 20})
+        for c in c_resp.get("values", []):
+            if cust_name.lower() in c.get("name", "").lower():
+                customer_id = c["id"]
+                break
+
+    # Find invoice related to this customer/description
+    inv_params = {"invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-12-31", "count": 20, "fields": "id,invoiceNumber,customer,amount,amountCurrency,voucher"}
+    if customer_id:
+        inv_params["customerId"] = customer_id
+    _, inv_resp = tx_get(base_url, token, "/invoice", inv_params)
+    invoices = inv_resp.get("values", [])
+
+    # Strategy 2: Find all vouchers and look for payment-related ones
     _, v_resp = tx_get(base_url, token, "/ledger/voucher", {
-        "dateFrom": "2020-01-01", "dateTo": "2030-12-31", "count": 10
+        "dateFrom": "2020-01-01", "dateTo": "2030-12-31", "count": 50,
+        "fields": "id,number,description,date,postings"
     })
     vouchers = v_resp.get("values", [])
-    if not vouchers:
+
+    # Try to find the payment voucher specifically
+    target_voucher = None
+
+    # Look for vouchers with description matching the invoice/customer
+    search_terms = [t.lower() for t in [description, cust_name] if t]
+    for v in vouchers:
+        v_desc = (v.get("description") or "").lower()
+        if any(term in v_desc for term in search_terms if term):
+            # Check if this looks like a payment voucher (has bank account posting)
+            target_voucher = v["id"]
+            break
+
+    # If no match by description, look for vouchers linked to invoice voucher
+    if not target_voucher and invoices:
+        invoice_voucher_ids = set()
+        for inv in invoices:
+            vid = inv.get("voucher", {}).get("id") if isinstance(inv.get("voucher"), dict) else inv.get("voucherId")
+            if vid:
+                invoice_voucher_ids.add(vid)
+        # Payment voucher is typically NOT the invoice voucher, but posted after it
+        for v in vouchers:
+            if v["id"] not in invoice_voucher_ids:
+                target_voucher = v["id"]
+                break
+
+    # Fallback: reverse most recent voucher
+    if not target_voucher and vouchers:
+        target_voucher = vouchers[-1]["id"]
+
+    if not target_voucher:
         print("No vouchers to reverse")
         return False
 
-    v_id = e.get("voucherId") or vouchers[0]["id"]
+    v_id = e.get("voucherId") or target_voucher
     st, resp = tx_put(base_url, token, f"/ledger/voucher/{v_id}/:reverse", params={
         "date": e.get("date") or today,
     })
-    print(f"reverse_voucher: {st} {str(resp)[:200]}")
+    print(f"reverse_voucher: {st} id={v_id} {str(resp)[:200]}")
     return st in (200, 201)
 
 
@@ -1576,7 +1714,7 @@ def handle_project_invoice(base_url, token, e):
     print(f"create project: {st} id={proj_id} {str(proj_resp)[:200] if st != 201 else ''}")
 
     # Step 4: Find or create activity
-    activity_name = e.get("activityName") or e.get("activity", "Arbeid")
+    activity_name = e.get("activityName") or e.get("activity") or e.get("description") or "Arbeid"
     # Try to find existing activity first
     _, act_list = tx_get(base_url, token, "/activity", {"name": activity_name, "count": 1})
     acts = act_list.get("values", [])
@@ -1625,7 +1763,7 @@ def handle_project_invoice(base_url, token, e):
             "employee": {"id": emp_id},
             "date": today,
             "rate": hourly_rate,
-            "costRate": hourly_rate,
+            "hourCostRate": hourly_rate,
         }
         if proj_id:
             hr_body["project"] = {"id": proj_id}
@@ -1674,9 +1812,21 @@ def handle_project_invoice(base_url, token, e):
     print(f"create order: {st_ord} id={order_id}")
 
     if order_id:
+        due_date = str(date.today() + timedelta(days=30))
         st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
                                    params={"invoiceDate": today, "sendToCustomer": "false"})
-        print(f"order->invoice: {st_inv} {str(inv_resp)[:200]}")
+        inv_id = inv_resp.get("value", {}).get("id")
+        print(f"order->invoice: {st_inv} id={inv_id} {str(inv_resp)[:200]}")
+
+        # Set invoiceDueDate and send
+        if inv_id:
+            inv_update = {"id": inv_id, "invoiceDueDate": due_date}
+            st_upd, _ = tx_put(base_url, token, f"/invoice/{inv_id}", inv_update)
+            print(f"set invoiceDueDate: {st_upd}")
+
+            # Send invoice
+            st_send, _ = tx_put(base_url, token, f"/invoice/{inv_id}/:send", params={"sendType": "EMAIL"})
+            print(f"send invoice: {st_send}")
 
     return True
 
@@ -1863,6 +2013,16 @@ def normalize_entities(entities):
 def execute_plan(base_url, token, plan, prompt):
     task_type = plan.get("task_type", "unknown")
     entities = normalize_entities(plan.get("entities", {}))
+
+    # Post-LLM task type correction: if LLM said create_order but prompt mentions invoice+payment, use invoice_with_payment
+    if task_type == "create_order":
+        pl = prompt.lower()
+        has_invoice = any(kw in pl for kw in ["faktura", "invoice", "rechnung", "factura", "fatura"])
+        has_payment = any(kw in pl for kw in ["betaling", "payment", "zahlung", "pago", "pagamento", "paiement"])
+        if has_invoice and has_payment:
+            task_type = "invoice_with_payment"
+            print(f"Corrected task_type: create_order -> invoice_with_payment (prompt mentions invoice+payment)")
+
     print(f"Executing: {task_type} | entities: {json.dumps(entities, ensure_ascii=False)[:300]}")
 
     handler = HANDLERS.get(task_type)
