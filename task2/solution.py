@@ -2729,9 +2729,31 @@ def handle_year_end_closing(base_url, token, e):
 
     # Get taxable result from ledger (sum of income - expenses)
     # For now, use the result from the prompt if given, otherwise estimate
-    taxable_result = float(e.get("taxableResult") or e.get("result") or 0)
+    taxable_result = float(e.get("taxableResult") or e.get("result") or e.get("pretaxResult") or e.get("resultBeforeTax") or 0)
     if not taxable_result:
-        # Try to compute from ledger — get balance of income/expense accounts
+        # Try balanceSheet API for period income/expenses
+        year = str(e.get("closingYear") or today[:4])
+        _, bs_resp = tx_get(base_url, token, "/balanceSheet", {
+            "dateFrom": f"{year}-01-01", "dateTo": f"{year}-12-31",
+            "accountNumberFrom": 3000, "accountNumberTo": 8999,
+            "count": 200,
+        })
+        bs_vals = bs_resp.get("values", [])
+        income = 0
+        expenses = 0
+        for v in bs_vals:
+            acct = v.get("account", {}) if isinstance(v.get("account"), dict) else {}
+            num = int(acct.get("number", 0) or 0)
+            bal = float(v.get("balanceOut", 0) or v.get("balance", 0) or 0)
+            if 3000 <= num < 4000:
+                income += abs(bal)  # income accounts have negative balance (credit)
+            elif 4000 <= num < 9000:
+                expenses += abs(bal)
+        taxable_result = income - expenses
+        print(f"balanceSheet taxable: income={income} expenses={expenses} result={taxable_result}")
+
+    if not taxable_result:
+        # Fallback: try ledger/account balance
         _, acc_resp = tx_get(base_url, token, "/ledger/account", {
             "count": 200, "fields": "id,number,balance"
         })
@@ -2739,7 +2761,7 @@ def handle_year_end_closing(base_url, token, e):
         income = sum(abs(float(a.get("balance", 0))) for a in accounts if 3000 <= int(a.get("number", 0)) < 4000)
         expenses = sum(abs(float(a.get("balance", 0))) for a in accounts if 4000 <= int(a.get("number", 0)) < 9000)
         taxable_result = income - expenses
-        print(f"estimated taxable result: income={income} expenses={expenses} result={taxable_result}")
+        print(f"ledger account taxable: income={income} expenses={expenses} result={taxable_result}")
 
     if taxable_result > 0:
         tax_amount = round(taxable_result * tax_rate, 2)
@@ -3271,7 +3293,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2025"
+BUILD_VERSION = "v20260321-2035"
 
 @app.get("/health")
 def health():
