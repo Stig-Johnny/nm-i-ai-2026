@@ -791,7 +791,7 @@ def handle_create_employee(base_url, token, e):
 
 
 def handle_create_customer(base_url, token, e):
-    body = {"isCustomer": True}
+    body = {}  # isCustomer is readOnly — POST to /customer endpoint implies it
     name = e.get("name") or e.get("customerName") or (f"{e.get('firstName', '')} {e.get('lastName', '')}".strip() or None)
     if name: body["name"] = name
     email = e.get("email") or e.get("customerEmail")
@@ -818,7 +818,7 @@ def handle_create_customer(base_url, token, e):
 
 
 def handle_create_supplier(base_url, token, e):
-    body = {"name": e.get("name") or e.get("supplierName", "Supplier"), "isSupplier": True}
+    body = {"name": e.get("name") or e.get("supplierName", "Supplier")}  # isSupplier is readOnly
     email = e.get("email") or e.get("supplierEmail")
     if email:
         body["email"] = email
@@ -3304,7 +3304,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2230"
+BUILD_VERSION = "v20260321-2235"
 
 @app.get("/health")
 def health():
