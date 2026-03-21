@@ -123,7 +123,7 @@ def test_R01_create_customer_en():
     assert b["physicalAddress"]["city"] == "Bergen"
     assert b["physicalAddress"]["country"]["id"] == 161
     assert b["postalAddress"]["addressLine1"] == "Parkveien 61"
-    assert b.get("isCustomer") == True
+    # isCustomer is readOnly — POST to /customer endpoint implies it
 
 
 def test_R02_create_customer_de():
@@ -207,7 +207,7 @@ def test_R08_create_supplier_no_sjobris():
     assert b["organizationNumber"] == "811212717"
     assert b["email"] == "faktura@sjbris.no"
     assert b["invoiceEmail"] == "faktura@sjbris.no"
-    assert b.get("isSupplier") == True
+    # isSupplier is readOnly — POST to /supplier endpoint implies it
 
 
 def test_R09_create_supplier_de_bruckentor():

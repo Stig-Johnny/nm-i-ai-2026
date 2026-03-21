@@ -791,7 +791,7 @@ def handle_create_employee(base_url, token, e):
 
 
 def handle_create_customer(base_url, token, e):
-    body = {"isCustomer": True}
+    body = {}  # isCustomer is readOnly — POST to /customer endpoint implies it
     name = e.get("name") or e.get("customerName") or (f"{e.get('firstName', '')} {e.get('lastName', '')}".strip() or None)
     if name: body["name"] = name
     email = e.get("email") or e.get("customerEmail")
@@ -818,7 +818,7 @@ def handle_create_customer(base_url, token, e):
 
 
 def handle_create_supplier(base_url, token, e):
-    body = {"name": e.get("name") or e.get("supplierName", "Supplier"), "isSupplier": True}
+    body = {"name": e.get("name") or e.get("supplierName", "Supplier")}  # isSupplier is readOnly
     email = e.get("email") or e.get("supplierEmail")
     if email:
         body["email"] = email
@@ -1475,10 +1475,7 @@ def handle_register_supplier_invoice(base_url, token, e):
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
         "invoiceNumber": e.get("invoiceNumber") or "",
-        "amount": round(total_incl, 2),
-        "amountCurrency": round(total_incl, 2),
-        "amountExcludingVat": round(net_amount, 2),
-        "amountExcludingVatCurrency": round(net_amount, 2),
+        "amountCurrency": round(total_incl, 2),  # Only writable amount field
         "supplier": {"id": supplier_id} if supplier_id else None,
         "voucher": {
             "date": inv_date,
@@ -3307,7 +3304,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2225"
+BUILD_VERSION = "v20260321-2235"
 
 @app.get("/health")
 def health():
