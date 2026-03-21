@@ -891,6 +891,16 @@ def test_entity_normalizer_aliases():
     assert len(e.get("bankTransactions", [])) == 2, "customerPayments+supplierPayments → bankTransactions"
     assert e.get("salaryAccrual") == {"amount": 50000}, "salaryProvision → salaryAccrual"
 
+    # Test new currency aliases
+    e2 = normalize_entities({
+        "exchangeLossAmount": 641.07,
+        "exchangeLossAccount": 1930,
+        "exchangeGainAmount": 500.0,
+    })
+    assert e2.get("currencyLossNOK") == 641.07, "exchangeLossAmount → currencyLossNOK"
+    assert e2.get("exchangeDifferenceAccount") == 1930, "exchangeLossAccount → exchangeDifferenceAccount"
+    assert e2.get("currencyGainNOK") == 500.0, "exchangeGainAmount → currencyGainNOK"
+
 
 # ============================================================
 # Run
