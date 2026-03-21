@@ -9,7 +9,7 @@ def load_training():
     training = defaultdict(list)
     er_rates = {}
     
-    for rn in range(1, 8):  # Include R7 if available
+    for rn in range(1, 30):  # Load all available rounds
         for seed in range(5):
             path = f"{DATA_DIR}/round{rn}_gt_seed{seed}.json"
             if not os.path.exists(path): continue
