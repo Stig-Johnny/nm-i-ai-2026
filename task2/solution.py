@@ -3228,7 +3228,8 @@ async def solve(request: Request):
     file_texts = extract_file_texts(files)
 
     # Try regex first (fast, no LLM call), fall back to LLM
-    plan = regex_parse(prompt)
+    # Skip regex if files are attached — need LLM to read PDF/image content
+    plan = regex_parse(prompt) if not files else None
     if plan:
         print(f"REGEX PARSE: {plan.get('task_type', '?')}")
     else:
@@ -3251,7 +3252,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2110"
+BUILD_VERSION = "v20260321-2115"
 
 @app.get("/health")
 def health():
