@@ -288,9 +288,9 @@ def test_R14_supplier_invoice_tindra():
     body = si[0][2]
     assert body.get("invoiceNumber") == "INV-2026-3624"
     postings = body.get("voucher", {}).get("postings", [])
-    assert len(postings) == 2  # expense with vatType + credit
-    expense = [p for p in postings if p["amountGross"] > 0]
-    assert abs(expense[0]["amountGross"] - 33680) < 1
+    assert len(postings) == 3  # expense + VAT + credit
+    expense = [p for p in postings if p.get("amountGross", 0) > 0]
+    assert any(abs(p["amountGross"] - 33680) < 1 for p in expense), "Expense posting ~33680"
 
 
 def test_R15_supplier_invoice_snohetta():
@@ -300,9 +300,9 @@ def test_R15_supplier_invoice_snohetta():
     si = posts(m, "/supplierInvoice")
     assert len(si) >= 1
     postings = si[0][2].get("voucher", {}).get("postings", [])
-    expense = [p for p in postings if p["amountGross"] > 0]
-    assert len(expense) == 1
-    assert abs(expense[0]["amountGross"] - 9560) < 1  # 11950/1.25
+    assert len(postings) == 3  # expense + VAT + credit
+    expense = [p for p in postings if p.get("amountGross", 0) > 0]
+    assert any(abs(p["amountGross"] - 9560) < 1 for p in expense)  # 11950/1.25
 
 
 # ============================================================
