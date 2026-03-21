@@ -76,7 +76,8 @@ Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk
     // For invoices: customerName, customerOrgNumber, lines [{description, unitPrice, count}]
     // For supplier invoices: supplierName, supplierOrgNumber, invoiceNumber, totalAmountInclVat, netAmount, vatAmount, vatRate, accountNumber
     // For payroll: employeeName, employeeEmail, baseSalary, bonus, totalAmount
-    // For travel expenses: employeeName, employeeEmail, title, date, expenses [{description, amount}], diet {dailyRate, days, total}
+    // For travel expenses: employeeName, employeeEmail, title, date, department, expenses [{description, amount}], diet {dailyRate, days, total}
+    // For receipt-based travel expenses (kvittering/Quittung): extract amount, date, vendor from the receipt/PDF; use 'togbillett'/'train ticket' → accountNumber 7140, vatRate 12 (Norwegian passenger transport)
     // For products: name, number (product number), priceExcludingVat, vatRate
     // For projects: name (project name), customerName, customerOrgNumber, projectManagerName, projectManagerEmail, fixedPrice, invoicePercentage
     // For accounting dimensions: dimensionName, dimensionValues [strings], accountNumber (number), amount, linkedDimensionValue
@@ -127,7 +128,7 @@ def regex_parse(prompt):
         return m.group(0) if m else None
 
     def find_org(t):
-        m = re.search(r'(?:org\.?\s*(?:nr|n[º°]|nummer|number)\.?\s*:?\s*|organisasjonsnummer\s+|Organisationsnummer\s+|organization\s+number\s+|numéro\s+d.organisation\s+|número\s+de\s+organiza\w+\s+)(\d{6,})', t, re.I)
+        m = re.search(r'(?:org\.?[\s-]*(?:nr|no|n[º°]|nummer|number)\.?\s*:?\s*|organisasjonsnummer\s+|Organisationsnummer\s+|organization\s+number\s+|numéro\s+d.organisation\s+|número\s+de\s+organiza\w+\s+)(\d{6,})', t, re.I)
         return m.group(1) if m else None
 
     def find_amount(t, *keywords):
@@ -194,6 +195,18 @@ def regex_parse(prompt):
         else:
             name_match = re.search(r'(?:navn|name|nombre|nom)\s+["\']?(\w[\w\s]*)', p)
             return {"task_type": "create_department", "entities": {"name": name_match.group(1).strip() if name_match else "Department"}}
+
+    # === PAYMENT (check before invoice — payment prompts also mention "invoice"/"faktura") ===
+    if re.search(r'betaling|payment|zahlung|pago|paiement|pagamento', pl):
+        if not re.search(r'opprett|create|erstell|crea|créez', pl):  # Not "create invoice with payment"
+            cust_name = find_name_after(p, 'kunden', 'customer', 'kunde', 'client', 'cliente')
+            cust_org = find_org(p)
+            amt = find_amount(p)
+            desc_match = re.search(r'["\']([^"\']+)["\']', p)
+            return {"task_type": "register_payment", "entities": {
+                "customerName": cust_name, "customerOrgNumber": cust_org,
+                "amount": amt, "description": desc_match.group(1) if desc_match else "",
+            }}
 
     # === INVOICE (check before customer — invoices mention customers but are invoices) ===
     # Exclude "faktura" appearing only in email addresses
@@ -343,14 +356,10 @@ def regex_parse(prompt):
             },
         }
 
-    # === PAYMENT ===
-    if re.search(r'betaling|payment|zahlung|pago|paiement', pl):
-        return {"task_type": "register_payment", "entities": {"amount": find_amount(p)}}
-
     return None  # Unrecognized — fall through to LLM
 
 
-def parse_with_claude(prompt, file_texts):
+def parse_with_claude(prompt, file_texts, raw_files=None):
     import time as _time
     start = _time.time()
 
@@ -374,12 +383,41 @@ def parse_with_claude(prompt, file_texts):
             pass
 
     try:
-        result = subprocess.run(
-            [CLAUDE_PATH, "-p", "--model", "haiku", SYSTEM_PROMPT],
-            input=full_prompt,
-            capture_output=True, text=True, timeout=45
+        # Use Anthropic SDK directly so we can pass PDFs/images natively
+        # (scanned receipts as image-based PDFs can't be read by pdfminer)
+        from anthropic import Anthropic as _Anthropic
+        _client = _Anthropic()
+        content_blocks = []
+
+        # Add any raw files as native documents/images
+        if raw_files:
+            for rf in raw_files:
+                mime = rf.get("mime_type", "")
+                b64 = rf.get("content_base64", "")
+                fname = rf.get("filename", "file")
+                if b64:
+                    if "pdf" in mime:
+                        content_blocks.append({
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+                            "title": fname,
+                        })
+                    elif "image" in mime:
+                        img_mime = mime if mime in ("image/jpeg", "image/png", "image/gif", "image/webp") else "image/jpeg"
+                        content_blocks.append({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": img_mime, "data": b64},
+                        })
+
+        content_blocks.append({"type": "text", "text": full_prompt})
+
+        resp = _client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": content_blocks}],
         )
-        raw = result.stdout.strip()
+        raw = resp.content[0].text.strip()
         print(f"LLM raw: {raw[:400]}")
 
         # Clean markdown fences
@@ -454,6 +492,7 @@ def get_or_create_employee(base_url, token, name=None, email=None):
         "firstName": parts[0],
         "lastName": " ".join(parts[1:]) or "Employee",
         "userType": "STANDARD",
+        "dateOfBirth": "1990-01-01",
     }
     if email:
         body["email"] = email
@@ -871,6 +910,19 @@ def handle_create_travel_expense(base_url, token, e):
         if dest_match:
             destination = dest_match.group(1)
 
+    # Look up department if specified (e.g. "Logistikk")
+    dept_id = None
+    dept_name = e.get("department")
+    if dept_name:
+        _, dr = tx_get(base_url, token, "/department", {"name": dept_name, "count": 5, "fields": "id,name"})
+        depts = dr.get("values", [])
+        if depts:
+            dept_id = depts[0]["id"]
+            print(f"department '{dept_name}' id={dept_id}")
+        else:
+            print(f"department '{dept_name}' not found — will create")
+            dept_id = get_or_create_department(base_url, token, name=dept_name)
+
     te_body = {
         "employee": {"id": emp_id},
         "title": title,
@@ -884,6 +936,8 @@ def handle_create_travel_expense(base_url, token, e):
             "isDayTrip": travel_days <= 1,
         },
     }
+    if dept_id:
+        te_body["department"] = {"id": dept_id}
     st, resp = tx_post(base_url, token, "/travelExpense", te_body)
     te_id = resp.get("value", {}).get("id")
     print(f"create_travel_expense: {st} id={te_id} {str(resp)[:150]}")
@@ -936,24 +990,21 @@ def handle_create_travel_expense(base_url, token, e):
             print(f"  rateTypes for cat {per_diem_cat['id']}: {[(r['id'], r.get('rate',''), r.get('zone','')) for r in rate_types[:5]]}")
 
         if per_diem_cat:
-            # Swagger: no countryCode field (causes 422 "Country not enabled")
-            # Swagger: no count field — derive days from startDate/endDate
-            pd_start = e.get("startDate") or e.get("date") or today
-            try:
-                from datetime import date as _d2, timedelta as _td2
-                pd_start_dt = _d2.fromisoformat(pd_start)
-            except Exception:
-                from datetime import date as _d2, timedelta as _td2
-                pd_start_dt = _d2.today()
-            pd_end = (pd_start_dt + _td2(days=max(diet_days - 1, 0))).isoformat()
-
+            # Pick correct category based on travel duration
+            # Dagsreise (day trip) vs Overnatting (overnight)
+            if travel_days > 1:
+                # Overnight — find "Overnatting over 12 timer" category
+                for rc in rate_cats:
+                    if rc.get("type") == "PER_DIEM" and "overnatting" in rc.get("name", "").lower() and "over 12" in rc.get("name", "").lower():
+                        per_diem_cat = rc
+                        break
+            overnight = "HOTEL" if travel_days > 1 else "NONE"
             pd_body = {
                 "travelExpense": {"id": te_id},
                 "rateCategory": {"id": per_diem_cat["id"]},
-                "overnightAccommodation": "HOTEL" if travel_days > 1 else "NONE",
+                "overnightAccommodation": overnight,
                 "location": destination or "Norge",
-                "startDate": pd_start,
-                "endDate": pd_end,
+                "count": diet_days,
                 "isDeductionForBreakfast": False,
                 "isDeductionForLunch": False,
                 "isDeductionForDinner": False,
@@ -1022,7 +1073,7 @@ def handle_create_travel_expense(base_url, token, e):
         print(f"  cost '{desc}' {amt}: {st_c}")
 
     # Deliver the travel expense
-    st_del, resp_del = tx_put(base_url, token, f"/travelExpense/{te_id}/:deliver")
+    st_del, resp_del = tx_put(base_url, token, "/travelExpense/:deliver", params={"id": te_id})
     print(f"deliver travel expense: {st_del} {str(resp_del)[:300] if st_del != 200 else ''}")
 
     return True
@@ -1045,61 +1096,53 @@ def handle_delete_travel_expense(base_url, token, e):
 
 def handle_register_payment(base_url, token, e):
     today = str(date.today())
+    cust_name = e.get("customerName") or e.get("name") or ""
+    cust_org = e.get("customerOrgNumber") or e.get("organizationNumber") or ""
+    description = e.get("description") or e.get("invoiceDescription") or ""
 
-    # Step 1: find customer to filter invoices correctly
-    cust_id = None
-    cust_name = e.get("customerName") or e.get("customer")
-    cust_org = e.get("customerOrgNumber") or e.get("organizationNumber")
-    if cust_org or cust_name:
-        cust_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
+    # Find customer
+    customer_id = None
+    if cust_org:
+        _, c_resp = tx_get(base_url, token, "/customer", {"organizationNumber": cust_org, "fields": "id", "count": 1})
+        vals = c_resp.get("values", [])
+        if vals:
+            customer_id = vals[0]["id"]
 
-    # Step 2: find the right invoice — filter by customer if we have one
-    inv_params = {"invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-12-31",
-                  "count": 50, "fields": "id,customerId,amountCurrency,amountOutstandingTotal,invoiceNumber"}
-    if cust_id:
-        inv_params["customerId"] = cust_id
-    _, inv_resp = tx_get(base_url, token, "/invoice", inv_params)
+    # Find invoice — filter by customer if possible
+    params = {"invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-12-31", "count": 50,
+              "fields": "id,invoiceNumber,customer,amountCurrency,amountOutstanding,amountOutstandingTotal"}
+    if customer_id:
+        params["customerId"] = customer_id
+    _, inv_resp = tx_get(base_url, token, "/invoice", params)
     invoices = inv_resp.get("values", [])
-
-    # If customer filter returned nothing, fall back to all invoices
-    if not invoices and cust_id:
-        inv_params.pop("customerId", None)
-        _, inv_resp = tx_get(base_url, token, "/invoice", inv_params)
-        invoices = inv_resp.get("values", [])
-        # Then filter client-side
-        if cust_id:
-            invoices = [i for i in invoices if i.get("customerId") == cust_id] or invoices
-
     if not invoices:
         print("No invoices found")
         return False
+
+    # Pick best matching invoice
+    invoice = invoices[0]
+    inv_id = invoice["id"]
+    print(f"found invoice: id={inv_id} amount={invoice.get('amountCurrency')} outstanding={invoice.get('amountOutstandingTotal')}")
 
     # Get payment type
     _, pt_resp = tx_get(base_url, token, "/invoice/paymentType", {"count": 5, "fields": "id"})
     pt_list = pt_resp.get("values", [])
     pt_id = pt_list[0]["id"] if pt_list else 0
 
-    invoice = invoices[0]
-    inv_id = invoice["id"]
-
-    # Step 3: use invoice's own outstanding/total amount — NOT the net amount from the prompt
-    # Prompt amount is typically excl. VAT; payment must be total incl. VAT
-    amount = (invoice.get("amountOutstandingTotal")
-              or invoice.get("amountCurrency")
-              or e.get("paidAmount")
-              or e.get("totalAmountInclVat"))
+    # Use invoice's own amount for full payment — this is the total incl VAT
+    amount = invoice.get("amountOutstandingTotal") or invoice.get("amountCurrency", 0)
     if not amount:
+        # Fallback: calculate from prompt amount + VAT
         net = float(e.get("amount") or e.get("netAmount") or 0)
         vat_rate = float(e.get("vatRate") or 25)
         amount = net * (1 + vat_rate / 100) if net else 0
 
-    print(f"register_payment: invoice id={inv_id} amount={amount} pt={pt_id}")
     st, resp = tx_put(base_url, token, f"/invoice/{inv_id}/:payment", params={
         "paymentDate": e.get("date") or e.get("paymentDate") or today,
         "paymentTypeId": pt_id,
         "paidAmount": float(amount),
     })
-    print(f"register_payment result: {st} {str(resp)[:200]}")
+    print(f"invoice payment: {st} amount={amount} {str(resp)[:200]}")
     return st in (200, 201)
 
 
@@ -1234,39 +1277,31 @@ def handle_run_payroll(base_url, token, e):
     # Ensure employee has employment record (required for salary/transaction)
     st_emp, emp_resp = tx_get(base_url, token, "/employee/employment", {"employeeId": emp_id, "fields": "id", "count": 1})
     existing_employment = emp_resp.get("values", [])
-    start_date = e.get("startDate") or "2024-01-01"
     if not existing_employment:
-        # Swagger: Employment only needs employee + startDate (+ optional taxDeductionCode, isMainEmployer)
-        # employmentType/remunerationType go on employment/details, NOT here
         emp_body = {
             "employee": {"id": emp_id},
-            "startDate": start_date,
-            "isMainEmployer": True,
-            "taxDeductionCode": "loennFraHovedarbeidsgiver",
+            "startDate": "2024-01-01",
         }
         st_e, resp_e = tx_post(base_url, token, "/employee/employment", emp_body)
         employment_id = resp_e.get("value", {}).get("id")
-        print(f"create employment: {st_e} id={employment_id} {str(resp_e)[:150] if st_e != 201 else ''}")
-    else:
-        employment_id = existing_employment[0]["id"]
-        print(f"employment exists: id={employment_id}")
+        print(f"create employment: {st_e} id={employment_id} {str(resp_e)[:500] if st_e != 201 else ''}")
 
-    # Add employment details — this is where employmentType and remunerationType live
-    # percentageOfFullTimeEquivalent is required by Swagger
-    if employment_id:
-        # annualSalary: if prompt gives monthly, multiply by 12
-        annual_salary = base_salary * 12 if base_salary > 0 else 0
-        det_body = {
-            "employment": {"id": employment_id},
-            "date": start_date,
-            "employmentType": "ORDINARY",
-            "remunerationType": "MONTHLY_WAGE",
-            "percentageOfFullTimeEquivalent": 100.0,  # required
-        }
-        if annual_salary > 0:
-            det_body["annualSalary"] = round(annual_salary, 2)
-        st_d, resp_d = tx_post(base_url, token, "/employee/employment/details", det_body)
-        print(f"employment details: {st_d} {str(resp_d)[:200] if st_d != 201 else ''}")
+        # Add employment details with salary, employment type, etc.
+        if employment_id:
+            det_body = {
+                "employment": {"id": employment_id},
+                "date": "2024-01-01",
+                "employmentType": "ORDINARY",
+                "remunerationType": "MONTHLY_WAGE",
+                "percentageOfFullTimeEquivalent": 100.0,
+                "workingHoursScheme": "NOT_SHIFT",
+            }
+            if base_salary > 0:
+                det_body["annualSalary"] = round(base_salary * 12, 2)
+            st_d, resp_d = tx_post(base_url, token, "/employee/employment/details", det_body)
+            print(f"employment details: {st_d} {str(resp_d)[:300] if st_d != 201 else ''}")
+    else:
+        print(f"employment exists: id={existing_employment[0]['id']}")
 
     # Get salary type IDs (these are per-company, need to look up)
     _, st_resp = tx_get(base_url, token, "/salary/type", {"count": 60, "fields": "id,number,name"})
@@ -1790,12 +1825,8 @@ def handle_project_invoice(base_url, token, e):
             "rate": hourly_rate,
             "hourCostRate": hourly_rate,
         }
-        if proj_id:
-            hr_body["project"] = {"id": proj_id}
-        if act_id:
-            hr_body["activity"] = {"id": act_id}
         st_hr, hr_resp = tx_post(base_url, token, "/employee/hourlyCostAndRate", hr_body)
-        print(f"hourly rate: {st_hr} {str(hr_resp)[:150]}")
+        print(f"hourly rate: {st_hr} {str(hr_resp)[:200] if st_hr != 201 else ''}")
 
     # Step 7: Create invoice
     ensure_bank_account(base_url, token)
@@ -1815,20 +1846,18 @@ def handle_project_invoice(base_url, token, e):
         total_amount = float(e.get("totalAmount", 0))
         desc = proj_name
 
-    NOK_VAT_OUT = {"25": 3, "15": 31, "12": 32, "0": 6}
-    vat_pct = str(e.get("vatRate") or "25").replace("%", "").strip().split(".")[0]
     order_lines = [{
         "description": desc,
-        "unitPriceExcludingVatCurrency": total_amount,  # fixed: was `hourly_rate or total_amount` (hourly_rate=0 falsified)
+        "unitPriceExcludingVatCurrency": hourly_rate or total_amount,
         "count": hours or 1.0,
-        "vatType": {"id": NOK_VAT_OUT.get(vat_pct, 3)},  # always set VAT — was missing for fixed-price
+        "vatType": {"id": 3},  # 25% standard Norwegian VAT
     }]
 
-    due_date = e.get("invoiceDueDate") or e.get("dueDate") or str(date.today() + timedelta(days=30))
+    due = str(date.today() + timedelta(days=30))
     order_body = {
         "customer": {"id": customer_id} if customer_id else None,
         "orderDate": today,
-        "deliveryDate": due_date,  # deliveryDate = invoice due date
+        "deliveryDate": due,
         "orderLines": order_lines,
     }
     if order_body.get("customer") is None:
@@ -1841,21 +1870,14 @@ def handle_project_invoice(base_url, token, e):
     print(f"create order: {st_ord} id={order_id}")
 
     if order_id:
-        # Pass invoiceDueDate directly as param — avoids separate GET+PUT
         st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
-                                   params={"invoiceDate": today, "invoiceDueDate": due_date,
-                                           "sendToCustomer": "false"})
-        inv_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
-        print(f"order->invoice: {st_inv} id={inv_id}")
+                                   params={"invoiceDate": today, "sendToCustomer": "false"})
+        inv_id = inv_resp.get("value", {}).get("id")
+        print(f"order->invoice: {st_inv} id={inv_id} {str(inv_resp)[:200]}")
 
+        # Send invoice
         if inv_id:
-            # Send invoice — try EHF first (Norwegian Peppol), fall back to EMAIL
-            for stype in (["EHF"] if cust_org else []) + ["EMAIL"]:
-                st_send, _ = tx_put(base_url, token, f"/invoice/{inv_id}/:send",
-                                    params={"sendType": stype})
-                print(f"send ({stype}): {st_send}")
-                if st_send in (200, 201, 204):
-                    break
+            st_send, _ = tx_put(base_url, token, f"/invoice/{inv_id}/:send", params={"sendType": "EMAIL"})
             print(f"send invoice: {st_send}")
 
     return True
@@ -2123,8 +2145,8 @@ async def solve(request: Request):
 
     file_texts = extract_file_texts(files)
 
-    # Parse prompt with LLM
-    plan = parse_with_claude(prompt, file_texts)
+    # Parse prompt with LLM — pass raw files for native PDF/image handling
+    plan = parse_with_claude(prompt, file_texts, raw_files=files)
     if not plan:
         print("LLM parsing failed, no plan generated")
         return JSONResponse({"status": "completed"})
