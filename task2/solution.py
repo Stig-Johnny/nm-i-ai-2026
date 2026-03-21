@@ -226,7 +226,7 @@ def regex_parse(prompt):
 
     # === PAYMENT (check before invoice — payment prompts also mention "invoice"/"faktura") ===
     if re.search(r'betaling|payment|zahlung|pago|paiement|pagamento', pl):
-        if not re.search(r'opprett|create|erstell|crea|créez|fastpris|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo|delbetaling|milestone', pl):  # Not project invoice or create
+        if not re.search(r'opprett|create|erstell|crea|crie|créez|fastpris|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo|delbetaling|milestone|pedido|ordre|order.*invoice|konverter|converta|convert', pl):  # Not project invoice, order→invoice, or create
             cust_name = find_name_after(p, 'kunden', 'customer', 'kunde', 'client', 'cliente')
             cust_org = find_org(p)
             amt = find_amount(p)
@@ -3346,7 +3346,7 @@ async def _solve_inner(request: Request):
             import re as _re
             prompt_no_email = _re.sub(r'[\w.+-]+@[\w.-]+', '', prompt.lower())
             # Count distinct action VERBS only (not nouns like faktura/invoice)
-            action_verbs = set(_re.findall(r'\b(?:opprett|create|registrer|registe|slett|delete|send|generer|generate|gere|oppdater|update|reverser|reverse|kjør|run|konverter|convert|créez|erstellen|envoyez|senden|fakturer|sett\s+fastpris|set\s+fixed|completa|configura)\b', prompt_no_email))
+            action_verbs = set(_re.findall(r'\b(?:opprett|create|crie|registrer|registe|slett|delete|send|generer|generate|gere|oppdater|update|reverser|reverse|kjør|run|konverter|converta|convert|créez|erstellen|envoyez|senden|fakturer|sett\s+fastpris|set\s+fixed|completa|configura)\b', prompt_no_email))
             if len(action_verbs) >= 2:
                 print(f"COMPLEX prompt ({len(prompt)} chars, {len(action_verbs)} actions) — forcing LLM")
                 plan = None
@@ -3372,7 +3372,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0025"
+BUILD_VERSION = "v20260322-0030"
 
 @app.get("/health")
 def health():
