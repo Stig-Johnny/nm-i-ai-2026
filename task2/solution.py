@@ -2129,13 +2129,13 @@ def handle_correct_ledger_errors(base_url, token, e):
             vat_amount = amt_excl * vat_rate / 100
             acct_id = find_account_id(base_url, token, acct_num)
             vat_acct_id = find_account_id(base_url, token, vat_acct_num)
-            bank_id = find_account_id(base_url, token, 1920)
-            if vat_acct_id:
+            if vat_acct_id and acct_id:
+                # Debit VAT account, credit expense account (expense was overstated without VAT separation)
                 postings = [
                     {"row": 1, "date": today, "description": f"Korreksjon: manglende MVA konto {acct_num}",
                      "account": {"id": vat_acct_id}, "amountGross": round(vat_amount, 2), "amountGrossCurrency": round(vat_amount, 2)},
-                    {"row": 2, "date": today, "description": f"Korreksjon: manglende MVA motpost",
-                     "account": {"id": bank_id}, "amountGross": round(-vat_amount, 2), "amountGrossCurrency": round(-vat_amount, 2)},
+                    {"row": 2, "date": today, "description": f"Korreksjon: redusert kostnad konto {acct_num}",
+                     "account": {"id": acct_id}, "amountGross": round(-vat_amount, 2), "amountGrossCurrency": round(-vat_amount, 2)},
                 ]
 
         elif "amount" in err_type.lower() or "beløp" in err_type.lower():
@@ -2234,8 +2234,8 @@ def handle_register_receipt_expense(base_url, token, e):
         "row": row, "date": receipt_date,
         "description": description,
         "account": {"id": bank_id},
-        "amountGross": round(-total_incl if total_incl else -total_debit, 2),
-        "amountGrossCurrency": round(-total_incl if total_incl else -total_debit, 2),
+        "amountGross": round(-(total_incl or total_debit * (1 + float(e.get("vatRate") or 25) / 100)), 2),
+        "amountGrossCurrency": round(-(total_incl or total_debit * (1 + float(e.get("vatRate") or 25) / 100)), 2),
     })
 
     voucher_body = {
