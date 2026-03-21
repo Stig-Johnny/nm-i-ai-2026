@@ -57,7 +57,7 @@ class APIMock:
             ]}
         if "/ledger/account" in path:
             num = int((params or {}).get("number", 0))
-            accts = {1209: 499, 1700: 498, 1720: 497, 1920: 500, 2400: 501, 2710: 502, 2900: 506, 2920: 507, 4300: 508, 4500: 509, 5000: 503, 6010: 510, 6540: 504, 6590: 511, 6800: 512, 6860: 513, 7000: 505, 7140: 514, 8060: 516, 8160: 517, 8700: 515}
+            accts = {1209: 499, 1500: 496, 1700: 498, 1720: 497, 1920: 500, 2400: 501, 2710: 502, 2900: 506, 2920: 507, 3400: 495, 4300: 508, 4500: 509, 5000: 503, 5200: 518, 6010: 510, 6020: 519, 6030: 520, 6300: 521, 6340: 522, 6500: 523, 6540: 504, 6590: 511, 6800: 512, 6860: 513, 7000: 505, 7100: 524, 7140: 514, 7300: 525, 8060: 516, 8160: 517, 8700: 515}
             aid = accts.get(num)
             return 200, {"values": [{"id": aid, "number": num, "name": f"Acct {num}", "bankAccountNumber": "86010517941"}] if aid else []}
         if "/ledger/vatType" in path: return 200, {"values": [{"id": 1, "name": "Inngående mva 25%", "percentage": 25}]}
@@ -841,6 +841,29 @@ def test_year_end_closing_annual():
         execute_plan("http://test", "tok", plan, "")
     vouchers = posts(mock, "/ledger/voucher")
     assert len(vouchers) >= 2, f"Should have >=2 vouchers (depreciation+prepaid), got {len(vouchers)}"
+
+
+def test_correct_ledger_errors_accountNumber_key():
+    """Ledger correction: handles 'accountNumber' key (not just 'account'/'wrongAccount')"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "correct_ledger_errors",
+        "entities": {
+            "errors": [
+                {"errorType": "duplicate", "accountNumber": 6540, "amount": 1300},
+                {"errorType": "missing_vat", "accountNumber": 7300, "amount": 5550, "vatAccount": "2710"},
+                {"errorType": "wrong_amount", "accountNumber": 6590, "amount": 16700, "correctAmount": 6350},
+            ]
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    vouchers = posts(mock, "/ledger/voucher")
+    assert len(vouchers) == 3, f"Expected 3 correction vouchers (accountNumber key), got {len(vouchers)}"
 
 
 def test_entity_normalizer_aliases():

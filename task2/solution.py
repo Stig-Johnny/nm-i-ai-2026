@@ -2797,7 +2797,7 @@ def handle_correct_ledger_errors(base_url, token, e):
 
         elif "duplic" in err_type:
             # Duplicate voucher: reverse it — offset to correctAccount or 1920
-            acct_num = int(err.get("account") or err.get("wrongAccount") or 0)
+            acct_num = int(err.get("account") or err.get("wrongAccount") or err.get("accountNumber") or 0)
             offset_num = int(err.get("correctAccount") or err.get("offsetAccount") or 1920)
             acct_id = find_account_id(base_url, token, acct_num)
             offset_id = find_account_id(base_url, token, offset_num) or find_account_id(base_url, token, 1920)
@@ -2811,7 +2811,7 @@ def handle_correct_ledger_errors(base_url, token, e):
 
         elif "vat" in err_type.lower() or "mva" in err_type.lower():
             # Missing VAT line: add the missing VAT posting
-            acct_num = int(err.get("account") or err.get("wrongAccount") or 0)
+            acct_num = int(err.get("account") or err.get("wrongAccount") or err.get("accountNumber") or 0)
             vat_acct_num = int(err.get("vatAccount", 2710))
             amt_gross = float(err.get("amountIncludingVat") or 0)
             amt_excl = float(err.get("amountExcludingVat") or err.get("amount") or 0)
@@ -2832,7 +2832,7 @@ def handle_correct_ledger_errors(base_url, token, e):
 
         elif "amount" in err_type.lower() or "beløp" in err_type.lower():
             # Wrong amount: reverse difference
-            acct_num = int(err.get("account") or err.get("wrongAccount") or 0)
+            acct_num = int(err.get("account") or err.get("wrongAccount") or err.get("accountNumber") or 0)
             wrong_amt = float(err.get("amount") or 0)
             correct_amt = float(err.get("correctAmount") or 0)
             diff = wrong_amt - correct_amt
@@ -3246,7 +3246,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-1940"
+BUILD_VERSION = "v20260321-1950"
 
 @app.get("/health")
 def health():
