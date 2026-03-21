@@ -1284,6 +1284,34 @@ def test_C20_supplier_invoice_handler_portuguese():
     assert len(si) >= 1 or len(vouch) >= 1, "Should create SI or voucher"
 
 
+def test_C21_fastpris_not_payment():
+    """Competition: 'Sett fastpris...delbetaling' must NOT be classified as register_payment (scored 2/8)."""
+    plan = regex_parse('Sett fastpris 203000 kr på prosjektet "Digital transformasjon" for Stormberg AS (org.nr 834028719). Prosjektleder er Hilde Hansen (hilde.hansen@example.org). Fakturer kunden for 75 % av fastprisen som en delbetaling.')
+    # Should NOT be register_payment — fastpris/delbetaling should be excluded
+    if plan:
+        assert plan["task_type"] != "register_payment", f"Misclassified as register_payment! Got: {plan['task_type']}"
+
+
+def test_C22_register_travel_expense_alias():
+    """Competition: LLM returns 'register_travel_expense' — must map to handler (scored 0/8)."""
+    from task2.solution import HANDLERS
+    assert "register_travel_expense" in HANDLERS, "register_travel_expense must be in HANDLERS dispatch"
+    assert HANDLERS["register_travel_expense"] == HANDLERS["create_travel_expense"]
+
+
+def test_C23_payment_excludes_project_keywords():
+    """Regex: payment detection must exclude fastpris/delbetaling/milestone prompts."""
+    # These should NOT be register_payment
+    for prompt in [
+        'Sett fastpris 100000 kr på prosjektet "Test". Fakturer 50% som delbetaling.',
+        'Set fixed price 200000 on project "Test". Invoice 75% as milestone payment.',
+        'Defina um preço fixo de 150000 NOK no projeto "Test". Fature 60% como pagamento.',
+    ]:
+        plan = regex_parse(prompt)
+        if plan:
+            assert plan["task_type"] != "register_payment", f"'{prompt[:50]}' misclassified as register_payment"
+
+
 # ============================================================
 # Run
 # ============================================================
