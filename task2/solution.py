@@ -1450,10 +1450,24 @@ def handle_register_supplier_invoice(base_url, token, e):
     st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
     print(f"supplierInvoice (no amount): {st} {str(resp)[:300]}")
 
-    # If that worked, try to see if amount was auto-calculated
     if st in (200, 201):
         val = resp.get("value", {})
-        print(f"  amount={val.get('amount')} amountCurrency={val.get('amountCurrency')}")
+        si_id = val.get("id")
+        print(f"  amount={val.get('amount')} amountCurrency={val.get('amountCurrency')} id={si_id}")
+
+        # If amount is 0, update voucher postings to trigger recalculation
+        if not val.get("amount") and si_id:
+            voucher_id = val.get("voucher", {}).get("id") if isinstance(val.get("voucher"), dict) else None
+            if not voucher_id:
+                _, si_detail = tx_get(base_url, token, f"/supplierInvoice/{si_id}", {"fields": "id,voucher"})
+                voucher_id = si_detail.get("value", {}).get("voucher", {}).get("id")
+            if voucher_id:
+                # Format as OrderLinePosting array (required by this endpoint)
+                olp = [{"posting": p} for p in si_postings]
+                st_vp, resp_vp = tx_put(base_url, token,
+                    f"/supplierInvoice/voucher/{voucher_id}/postings", olp,
+                    params={"sendToLedger": "true"})
+                print(f"  update voucher postings: {st_vp} {str(resp_vp)[:300]}")
         return True
 
     # Try WITH amountCurrency as fallback
@@ -3226,7 +3240,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-1900"
+BUILD_VERSION = "v20260321-1920"
 
 @app.get("/health")
 def health():
