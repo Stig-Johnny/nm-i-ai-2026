@@ -1212,29 +1212,39 @@ def handle_run_payroll(base_url, token, e):
     # Ensure employee has employment record (required for salary/transaction)
     st_emp, emp_resp = tx_get(base_url, token, "/employee/employment", {"employeeId": emp_id, "fields": "id", "count": 1})
     existing_employment = emp_resp.get("values", [])
+    start_date = e.get("startDate") or "2024-01-01"
     if not existing_employment:
+        # Swagger: Employment only needs employee + startDate (+ optional taxDeductionCode, isMainEmployer)
+        # employmentType/remunerationType go on employment/details, NOT here
         emp_body = {
             "employee": {"id": emp_id},
-            "startDate": e.get("startDate") or "2024-01-01",
-            # Swagger: Employment has no employmentType/remunerationType fields
+            "startDate": start_date,
             "isMainEmployer": True,
             "taxDeductionCode": "loennFraHovedarbeidsgiver",
         }
         st_e, resp_e = tx_post(base_url, token, "/employee/employment", emp_body)
         employment_id = resp_e.get("value", {}).get("id")
         print(f"create employment: {st_e} id={employment_id} {str(resp_e)[:150] if st_e != 201 else ''}")
-
-        # Add employment details with salary
-        if employment_id and base_salary > 0:
-            det_body = {
-                "employment": {"id": employment_id},
-                "date": "2024-01-01",
-                "salary": round(base_salary, 2),
-            }
-            st_d, resp_d = tx_post(base_url, token, "/employee/employment/details", det_body)
-            print(f"employment details: {st_d} {str(resp_d)[:150] if st_d != 201 else ''}")
     else:
-        print(f"employment exists: id={existing_employment[0]['id']}")
+        employment_id = existing_employment[0]["id"]
+        print(f"employment exists: id={employment_id}")
+
+    # Add employment details — this is where employmentType and remunerationType live
+    # percentageOfFullTimeEquivalent is required by Swagger
+    if employment_id:
+        # annualSalary: if prompt gives monthly, multiply by 12
+        annual_salary = base_salary * 12 if base_salary > 0 else 0
+        det_body = {
+            "employment": {"id": employment_id},
+            "date": start_date,
+            "employmentType": "ORDINARY",
+            "remunerationType": "MONTHLY_WAGE",
+            "percentageOfFullTimeEquivalent": 100.0,  # required
+        }
+        if annual_salary > 0:
+            det_body["annualSalary"] = round(annual_salary, 2)
+        st_d, resp_d = tx_post(base_url, token, "/employee/employment/details", det_body)
+        print(f"employment details: {st_d} {str(resp_d)[:200] if st_d != 201 else ''}")
 
     # Get salary type IDs (these are per-company, need to look up)
     _, st_resp = tx_get(base_url, token, "/salary/type", {"count": 60, "fields": "id,number,name"})
