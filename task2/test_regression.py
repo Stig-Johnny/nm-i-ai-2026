@@ -1399,6 +1399,16 @@ def test_C27_occupation_code_prefix_lookup():
     assert len(occ_lookups) >= 1, f"Should look up occupation code, got {occ_lookups}"
 
 
+def test_C28_complexity_guard_no_crash():
+    """Competition: Complexity guard must not crash (NameError: actions). Scored 0/8."""
+    # This long prompt with 2+ action verbs triggers the complexity guard
+    prompt = 'Registe 35 horas para Inês Ferreira (ines.ferreira@example.org) na atividade "Testing" do projeto "Configuração cloud" para Floresta Lda (org. nº 949247589). Taxa horária: 1000 NOK/h. Gere uma fatura de projeto ao cliente com base nas horas registadas.'
+    # Should not raise NameError — just return a plan or None
+    plan = regex_parse(prompt)
+    # This prompt is complex (>200 chars, multiple verbs) — may be None or a type
+    # The key assertion is: no crash
+
+
 # ============================================================
 # Run
 # ============================================================
