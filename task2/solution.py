@@ -3348,7 +3348,7 @@ async def _solve_inner(request: Request):
             # Count distinct action VERBS only (not nouns like faktura/invoice)
             action_verbs = set(_re.findall(r'\b(?:opprett|create|registrer|registe|slett|delete|send|generer|generate|gere|oppdater|update|reverser|reverse|kjør|run|konverter|convert|créez|erstellen|envoyez|senden|fakturer|sett\s+fastpris|set\s+fixed|completa|configura)\b', prompt_no_email))
             if len(action_verbs) >= 2:
-                print(f"COMPLEX prompt ({len(prompt)} chars, {actions} actions) — forcing LLM")
+                print(f"COMPLEX prompt ({len(prompt)} chars, {len(action_verbs)} actions) — forcing LLM")
                 plan = None
     if plan:
         print(f"REGEX PARSE: {plan.get('task_type', '?')}")
@@ -3372,7 +3372,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0020"
+BUILD_VERSION = "v20260322-0025"
 
 @app.get("/health")
 def health():
