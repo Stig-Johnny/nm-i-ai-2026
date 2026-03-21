@@ -636,6 +636,22 @@ def put_employee(base_url, token, emp_id, body):
     return tx_put(base_url, token, f"/employee/{emp_id}", body)
 
 
+def _posting(row, date_str, desc, acct_id, amount, **kwargs):
+    """Create a posting dict with all 4 amount fields set."""
+    p = {
+        "row": row, "date": date_str, "description": desc,
+        "account": {"id": acct_id},
+        "amount": round(amount, 2),
+        "amountCurrency": round(amount, 2),
+        "amount": round(amount, 2), "amountCurrency": round(amount, 2), "amountGross": round(amount, 2),
+        "amountGrossCurrency": round(amount, 2),
+    }
+    for k, v in kwargs.items():
+        if v is not None:
+            p[k] = v
+    return p
+
+
 def find_account_id(base_url, token, number):
     st, resp = tx_get(base_url, token, "/ledger/account", {"number": str(number), "fields": "id,number"})
     vals = resp.get("values", []) if st == 200 else []
@@ -1402,7 +1418,7 @@ def handle_register_supplier_invoice(base_url, token, e):
             "date": inv_date_str,
             "description": e.get("description") or "Leverandorfaktura",
             "account": {"id": expense_acct_id},
-            "amountGross": round(net_amount, 2),
+            "amount": round(net_amount, 2), "amountCurrency": round(net_amount, 2), "amountGross": round(net_amount, 2),
             "amountGrossCurrency": round(net_amount, 2),
             "vatType": {"id": vat_type_id},
         },
@@ -1411,7 +1427,7 @@ def handle_register_supplier_invoice(base_url, token, e):
             "date": inv_date_str,
             "description": f"Leverandorgjeld {e.get('supplierName', '')}".strip(),
             "account": {"id": payable_acct_id},
-            "amountGross": round(-total_incl, 2),
+            "amount": round(-total_incl, 2), "amountCurrency": round(-total_incl, 2), "amountGross": round(-total_incl, 2),
             "amountGrossCurrency": round(-total_incl, 2),
             "supplier": {"id": supplier_id} if supplier_id else None,
         },
@@ -1424,7 +1440,7 @@ def handle_register_supplier_invoice(base_url, token, e):
             "date": inv_date_str,
             "description": e.get("description") or "Leverandorfaktura",
             "account": {"id": expense_acct_id},
-            "amountGross": round(net_amount, 2),
+            "amount": round(net_amount, 2), "amountCurrency": round(net_amount, 2), "amountGross": round(net_amount, 2),
             "amountGrossCurrency": round(net_amount, 2),
         },
         {
@@ -1432,7 +1448,7 @@ def handle_register_supplier_invoice(base_url, token, e):
             "date": inv_date_str,
             "description": f"Inngående MVA {int(vat_rate)}%",
             "account": {"id": vat_acct_id},
-            "amountGross": round(vat_amount, 2),
+            "amount": round(vat_amount, 2), "amountCurrency": round(vat_amount, 2), "amountGross": round(vat_amount, 2),
             "amountGrossCurrency": round(vat_amount, 2),
         },
         {
@@ -1440,7 +1456,7 @@ def handle_register_supplier_invoice(base_url, token, e):
             "date": inv_date_str,
             "description": f"Leverandorgjeld {e.get('supplierName', '')}".strip(),
             "account": {"id": payable_acct_id},
-            "amountGross": round(-total_incl, 2),
+            "amount": round(-total_incl, 2), "amountCurrency": round(-total_incl, 2), "amountGross": round(-total_incl, 2),
             "amountGrossCurrency": round(-total_incl, 2),
         },
     ]
@@ -1606,7 +1622,7 @@ def handle_run_payroll(base_url, token, e):
             "row": row, "date": today,
             "description": f"Lonn {emp_name or ''}".strip(),
             "account": {"id": salary_acct},
-            "amountGross": round(base_salary, 2),
+            "amount": round(base_salary, 2), "amountCurrency": round(base_salary, 2), "amountGross": round(base_salary, 2),
             "amountGrossCurrency": round(base_salary, 2),
         })
         row += 1
@@ -1615,7 +1631,7 @@ def handle_run_payroll(base_url, token, e):
             "row": row, "date": today,
             "description": f"Bonus {emp_name or ''}".strip(),
             "account": {"id": salary_acct},
-            "amountGross": round(bonus, 2),
+            "amount": round(bonus, 2), "amountCurrency": round(bonus, 2), "amountGross": round(bonus, 2),
             "amountGrossCurrency": round(bonus, 2),
         })
         row += 1
@@ -1623,7 +1639,7 @@ def handle_run_payroll(base_url, token, e):
         "row": row, "date": today,
         "description": f"Lonnsutbetaling {emp_name or ''}".strip(),
         "account": {"id": bank_acct},
-        "amountGross": round(-total, 2),
+        "amount": round(-total, 2), "amountCurrency": round(-total, 2), "amountGross": round(-total, 2),
         "amountGrossCurrency": round(-total, 2),
     })
 
@@ -2001,7 +2017,7 @@ def handle_bank_reconciliation(base_url, token, e):
                     sc_supplier_id = get_or_create_supplier(base_url, token, name=tx_supp)
                     payable_posting = {"row": 1, "date": tx_date, "description": f"Leverandorbetaling {tx_supp}",
                              "account": {"id": payable_id},
-                             "amountGross": round(abs_amount, 2), "amountGrossCurrency": round(abs_amount, 2)}
+                             "amount": round(abs_amount, 2), "amountCurrency": round(abs_amount, 2), "amountGross": round(abs_amount, 2), "amountGrossCurrency": round(abs_amount, 2)}
                     if sc_supplier_id:
                         payable_posting["supplier"] = {"id": sc_supplier_id}
                     st_v, resp_v = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
@@ -2011,7 +2027,7 @@ def handle_bank_reconciliation(base_url, token, e):
                             payable_posting,
                             {"row": 2, "date": tx_date, "description": f"Bank utbetaling",
                              "account": {"id": bank_id},
-                             "amountGross": round(-abs_amount, 2), "amountGrossCurrency": round(-abs_amount, 2)},
+                             "amount": round(-abs_amount, 2), "amountCurrency": round(-abs_amount, 2), "amountGross": round(-abs_amount, 2), "amountGrossCurrency": round(-abs_amount, 2)},
                         ],
                     })
                     print(f"supplier payment {tx_supp} amount={abs_amount}: {st_v} {str(resp_v)[:300] if st_v != 201 else ''}")
@@ -2173,12 +2189,12 @@ def handle_project_invoice(base_url, token, e):
                 if expense_acct and payable_acct:
                     expense_posting = {"row": 1, "date": today, "description": f"Leverandorkostnad {sc_name or ''}".strip(),
                          "account": {"id": expense_acct},
-                         "amountGross": round(sc_amount, 2), "amountGrossCurrency": round(sc_amount, 2)}
+                         "amount": round(sc_amount, 2), "amountCurrency": round(sc_amount, 2), "amountGross": round(sc_amount, 2), "amountGrossCurrency": round(sc_amount, 2)}
                     if proj_id:
                         expense_posting["project"] = {"id": proj_id}
                     credit_posting = {"row": 2, "date": today, "description": f"Leverandorgjeld {sc_name or ''}".strip(),
                          "account": {"id": payable_acct},
-                         "amountGross": round(-sc_amount, 2), "amountGrossCurrency": round(-sc_amount, 2)}
+                         "amount": round(-sc_amount, 2), "amountCurrency": round(-sc_amount, 2), "amountGross": round(-sc_amount, 2), "amountGrossCurrency": round(-sc_amount, 2)}
                     if sc_supplier_id:
                         credit_posting["supplier"] = {"id": sc_supplier_id}
                     postings = [expense_posting, credit_posting]
@@ -2287,9 +2303,9 @@ def handle_create_accounting_dimension(base_url, token, e):
         dim_field = f"freeAccountingDimension{dim_index}"
         postings = [
             {"row": 1, "date": today, "account": {"id": acct_id},
-             "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
+             "amount": round(amount, 2), "amountCurrency": round(amount, 2), "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
             {"row": 2, "date": today, "account": {"id": bank_id},
-             "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
+             "amount": round(-amount, 2), "amountCurrency": round(-amount, 2), "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
         ]
         if dim_value_id:
             postings[0][dim_field] = {"id": dim_value_id}
@@ -2383,7 +2399,7 @@ def handle_reminder_fee(base_url, token, e):
     if debit_id and credit_id:
         debit_posting = {"row": 1, "date": today, "description": "Purregebyr kundefordring",
                  "account": {"id": debit_id},
-                 "amountGross": round(reminder_amount, 2), "amountGrossCurrency": round(reminder_amount, 2)}
+                 "amount": round(reminder_amount, 2), "amountCurrency": round(reminder_amount, 2), "amountGross": round(reminder_amount, 2), "amountGrossCurrency": round(reminder_amount, 2)}
         if cust_id:
             debit_posting["customer"] = {"id": cust_id}
         st_v, resp_v = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
@@ -2393,7 +2409,7 @@ def handle_reminder_fee(base_url, token, e):
                 debit_posting,
                 {"row": 2, "date": today, "description": "Purregebyr inntekt",
                  "account": {"id": credit_id},
-                 "amountGross": round(-reminder_amount, 2), "amountGrossCurrency": round(-reminder_amount, 2)},
+                 "amount": round(-reminder_amount, 2), "amountCurrency": round(-reminder_amount, 2), "amountGross": round(-reminder_amount, 2), "amountGrossCurrency": round(-reminder_amount, 2)},
             ],
         })
         print(f"reminder fee voucher: {st_v} {str(resp_v)[:300] if st_v != 201 else ''}")
@@ -2598,7 +2614,7 @@ def handle_year_end_closing(base_url, token, e):
                     "row": row, "date": closing_date,
                     "description": f"Avskrivning {asset.get('assetName', '')}",
                     "account": {"id": expense_acct},
-                    "amountGross": round(dep_amount, 2),
+                    "amount": round(dep_amount, 2), "amountCurrency": round(dep_amount, 2), "amountGross": round(dep_amount, 2),
                     "amountGrossCurrency": round(dep_amount, 2),
                 })
                 row += 1
@@ -2606,7 +2622,7 @@ def handle_year_end_closing(base_url, token, e):
                     "row": row, "date": closing_date,
                     "description": f"Akkumulert avskrivning {asset.get('assetName', '')}",
                     "account": {"id": accum_acct},
-                    "amountGross": round(-dep_amount, 2),
+                    "amount": round(-dep_amount, 2), "amountCurrency": round(-dep_amount, 2), "amountGross": round(-dep_amount, 2),
                     "amountGrossCurrency": round(-dep_amount, 2),
                 })
                 row += 1
@@ -2639,10 +2655,10 @@ def handle_year_end_closing(base_url, token, e):
                 "postings": [
                     {"row": 1, "date": closing_date, "description": "Forskuddsbetalt kostnad",
                      "account": {"id": expense_acct},
-                     "amountGross": round(prepaid_amount, 2), "amountGrossCurrency": round(prepaid_amount, 2)},
+                     "amount": round(prepaid_amount, 2), "amountCurrency": round(prepaid_amount, 2), "amountGross": round(prepaid_amount, 2), "amountGrossCurrency": round(prepaid_amount, 2)},
                     {"row": 2, "date": closing_date, "description": "Reduksjon forskuddsbetalt",
                      "account": {"id": prepaid_acct},
-                     "amountGross": round(-prepaid_amount, 2), "amountGrossCurrency": round(-prepaid_amount, 2)},
+                     "amount": round(-prepaid_amount, 2), "amountCurrency": round(-prepaid_amount, 2), "amountGross": round(-prepaid_amount, 2), "amountGrossCurrency": round(-prepaid_amount, 2)},
                 ],
             })
             print(f"prepaid reversal voucher: {st} {str(resp)[:200]}")
@@ -2663,10 +2679,10 @@ def handle_year_end_closing(base_url, token, e):
                     "postings": [
                         {"row": 1, "date": closing_date, "description": "Periodisert kostnad",
                          "account": {"id": acr_expense},
-                         "amountGross": round(acr_amount, 2), "amountGrossCurrency": round(acr_amount, 2)},
+                         "amount": round(acr_amount, 2), "amountCurrency": round(acr_amount, 2), "amountGross": round(acr_amount, 2), "amountGrossCurrency": round(acr_amount, 2)},
                         {"row": 2, "date": closing_date, "description": "Reduksjon forskuddsbetalt",
                          "account": {"id": acr_acct},
-                         "amountGross": round(-acr_amount, 2), "amountGrossCurrency": round(-acr_amount, 2)},
+                         "amount": round(-acr_amount, 2), "amountCurrency": round(-acr_amount, 2), "amountGross": round(-acr_amount, 2), "amountGrossCurrency": round(-acr_amount, 2)},
                     ],
                 })
                 print(f"accrual reversal voucher: {st_ar} {str(resp_ar)[:200]}")
@@ -2687,10 +2703,10 @@ def handle_year_end_closing(base_url, token, e):
                     "postings": [
                         {"row": 1, "date": closing_date, "description": "Lønnskostnad",
                          "account": {"id": sal_expense},
-                         "amountGross": round(sal_amount, 2), "amountGrossCurrency": round(sal_amount, 2)},
+                         "amount": round(sal_amount, 2), "amountCurrency": round(sal_amount, 2), "amountGross": round(sal_amount, 2), "amountGrossCurrency": round(sal_amount, 2)},
                         {"row": 2, "date": closing_date, "description": "Påløpt lønn",
                          "account": {"id": sal_accrual_acct},
-                         "amountGross": round(-sal_amount, 2), "amountGrossCurrency": round(-sal_amount, 2)},
+                         "amount": round(-sal_amount, 2), "amountCurrency": round(-sal_amount, 2), "amountGross": round(-sal_amount, 2), "amountGrossCurrency": round(-sal_amount, 2)},
                     ],
                 })
                 print(f"salary accrual voucher: {st_sa} amount={sal_amount} {str(resp_sa)[:200]}")
@@ -2717,10 +2733,10 @@ def handle_year_end_closing(base_url, token, e):
                             "postings": [
                                 {"row": 1, "date": closing_date, "description": "Lønnskostnad",
                                  "account": {"id": sal_expense},
-                                 "amountGross": round(sal_amount, 2), "amountGrossCurrency": round(sal_amount, 2)},
+                                 "amount": round(sal_amount, 2), "amountCurrency": round(sal_amount, 2), "amountGross": round(sal_amount, 2), "amountGrossCurrency": round(sal_amount, 2)},
                                 {"row": 2, "date": closing_date, "description": "Påløpt lønn",
                                  "account": {"id": sal_accrual_acct},
-                                 "amountGross": round(-sal_amount, 2), "amountGrossCurrency": round(-sal_amount, 2)},
+                                 "amount": round(-sal_amount, 2), "amountCurrency": round(-sal_amount, 2), "amountGross": round(-sal_amount, 2), "amountGrossCurrency": round(-sal_amount, 2)},
                             ],
                         })
                         print(f"salary accrual voucher (estimated): {st_sa} amount={sal_amount}")
@@ -2783,10 +2799,10 @@ def handle_year_end_closing(base_url, token, e):
                 "postings": [
                     {"row": 1, "date": closing_date, "description": "Skattekostnad",
                      "account": {"id": tax_acct},
-                     "amountGross": round(tax_amount, 2), "amountGrossCurrency": round(tax_amount, 2)},
+                     "amount": round(tax_amount, 2), "amountCurrency": round(tax_amount, 2), "amountGross": round(tax_amount, 2), "amountGrossCurrency": round(tax_amount, 2)},
                     {"row": 2, "date": closing_date, "description": "Betalbar skatt",
                      "account": {"id": tax_payable},
-                     "amountGross": round(-tax_amount, 2), "amountGrossCurrency": round(-tax_amount, 2)},
+                     "amount": round(-tax_amount, 2), "amountCurrency": round(-tax_amount, 2), "amountGross": round(-tax_amount, 2), "amountGrossCurrency": round(-tax_amount, 2)},
                 ],
             })
             print(f"tax provision voucher: {st} tax={tax_amount} {str(resp)[:200]}")
@@ -2825,9 +2841,9 @@ def handle_correct_ledger_errors(base_url, token, e):
             if wrong_acct and correct_acct:
                 postings = [
                     {"row": 1, "date": today, "description": f"Korreksjon: feil konto {err.get('wrongAccount')} -> {err.get('correctAccount')}",
-                     "account": {"id": wrong_acct}, "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
+                     "account": {"id": wrong_acct}, "amount": round(-amount, 2), "amountCurrency": round(-amount, 2), "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
                     {"row": 2, "date": today, "description": f"Korreksjon: riktig konto {err.get('correctAccount')}",
-                     "account": {"id": correct_acct}, "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
+                     "account": {"id": correct_acct}, "amount": round(amount, 2), "amountCurrency": round(amount, 2), "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
                 ]
 
         elif "duplic" in err_type:
@@ -2839,9 +2855,9 @@ def handle_correct_ledger_errors(base_url, token, e):
             if acct_id and offset_id:
                 postings = [
                     {"row": 1, "date": today, "description": f"Korreksjon: reversering duplikat bilag konto {acct_num}",
-                     "account": {"id": acct_id}, "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
+                     "account": {"id": acct_id}, "amount": round(-amount, 2), "amountCurrency": round(-amount, 2), "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
                     {"row": 2, "date": today, "description": f"Korreksjon: reversering duplikat motpost",
-                     "account": {"id": offset_id}, "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
+                     "account": {"id": offset_id}, "amount": round(amount, 2), "amountCurrency": round(amount, 2), "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
                 ]
 
         elif "vat" in err_type.lower() or "mva" in err_type.lower():
@@ -2860,9 +2876,9 @@ def handle_correct_ledger_errors(base_url, token, e):
                 # Debit VAT account, credit expense account (expense was overstated without VAT separation)
                 postings = [
                     {"row": 1, "date": today, "description": f"Korreksjon: manglende MVA konto {acct_num}",
-                     "account": {"id": vat_acct_id}, "amountGross": round(vat_amount, 2), "amountGrossCurrency": round(vat_amount, 2)},
+                     "account": {"id": vat_acct_id}, "amount": round(vat_amount, 2), "amountCurrency": round(vat_amount, 2), "amountGross": round(vat_amount, 2), "amountGrossCurrency": round(vat_amount, 2)},
                     {"row": 2, "date": today, "description": f"Korreksjon: redusert kostnad konto {acct_num}",
-                     "account": {"id": acct_id}, "amountGross": round(-vat_amount, 2), "amountGrossCurrency": round(-vat_amount, 2)},
+                     "account": {"id": acct_id}, "amount": round(-vat_amount, 2), "amountCurrency": round(-vat_amount, 2), "amountGross": round(-vat_amount, 2), "amountGrossCurrency": round(-vat_amount, 2)},
                 ]
 
         elif "amount" in err_type.lower() or "beløp" in err_type.lower():
@@ -2877,9 +2893,9 @@ def handle_correct_ledger_errors(base_url, token, e):
             if acct_id and diff and offset_id:
                 postings = [
                     {"row": 1, "date": today, "description": f"Korreksjon: feil beløp konto {acct_num} ({wrong_amt} -> {correct_amt})",
-                     "account": {"id": acct_id}, "amountGross": round(-diff, 2), "amountGrossCurrency": round(-diff, 2)},
+                     "account": {"id": acct_id}, "amount": round(-diff, 2), "amountCurrency": round(-diff, 2), "amountGross": round(-diff, 2), "amountGrossCurrency": round(-diff, 2)},
                     {"row": 2, "date": today, "description": f"Korreksjon: beløpsdifferanse",
-                     "account": {"id": offset_id}, "amountGross": round(diff, 2), "amountGrossCurrency": round(diff, 2)},
+                     "account": {"id": offset_id}, "amount": round(diff, 2), "amountCurrency": round(diff, 2), "amountGross": round(diff, 2), "amountGrossCurrency": round(diff, 2)},
                 ]
 
         if postings:
@@ -3278,7 +3294,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2155"
+BUILD_VERSION = "v20260321-2200"
 
 @app.get("/health")
 def health():
