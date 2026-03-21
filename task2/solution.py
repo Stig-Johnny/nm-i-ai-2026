@@ -217,6 +217,8 @@ def regex_parse(prompt):
         r'analysier|analyse.*hauptbuch|analyze.*ledger|analise.*livro|trois.*comptes|three.*accounts|drei.*konten',  # ledger analysis
         r'livssyklus|lifecycle|lebenszyklus|ciclo.*vida|cycle.*vie',  # project lifecycle
         r'valutadifferanse|exchange.*rate.*differ|wechselkurs|tipo.*cambio|taux.*change|taxa.*câmbio|agio|disagio',  # currency payment
+        r'konverter.*faktura.*betaling|convert.*invoice.*payment|wandeln.*rechnung.*zahlung|convertir.*factura.*pago|convertir.*facture.*paiement',  # order→invoice→payment
+        r'ordre.*faktura.*betaling|order.*invoice.*payment|auftrag.*rechnung.*zahlung|orden.*factura.*pago|commande.*facture.*paiement',  # order→invoice→payment
     ]
     for pat in complex_patterns:
         if re.search(pat, pl):
@@ -3252,7 +3254,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2115"
+BUILD_VERSION = "v20260321-2120"
 
 @app.get("/health")
 def health():
