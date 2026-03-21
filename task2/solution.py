@@ -770,16 +770,28 @@ def handle_create_employee(base_url, token, e):
                     det_body["annualSalary"] = salary
                 occ_code = e.get("occupationCode") or e.get("occupationalCode") or e.get("positionCode") or e.get("styrk") or e.get("stillingskode")
                 if occ_code:
-                    # Look up occupation code — try by code first (if numeric), then by name
+                    # Look up occupation code — STYRK codes are 7-digit but LLM often returns 4-digit prefix
                     occ_vals = []
-                    if str(occ_code).isdigit():
+                    occ_str = str(occ_code).strip()
+                    if occ_str.isdigit():
+                        # Try exact code first
                         _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
-                                            {"code": str(occ_code), "count": 1})
+                                            {"code": occ_str, "count": 1})
                         occ_vals = occ_resp.get("values", [])
+                        # If no match and code is short (4-digit STYRK prefix), try as prefix
+                        if not occ_vals and len(occ_str) <= 4:
+                            _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
+                                                {"code": occ_str + "*", "count": 1})
+                            occ_vals = occ_resp.get("values", [])
+                        # Also try with trailing zeros
+                        if not occ_vals and len(occ_str) <= 4:
+                            padded = occ_str + "0" * (7 - len(occ_str))
+                            _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
+                                                {"code": padded, "count": 1})
+                            occ_vals = occ_resp.get("values", [])
                     if not occ_vals:
                         _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
-                                            {"nameNO": str(occ_code), "count": 1})
-                        occ_vals = occ_resp.get("values", [])
+                                            {"nameNO": occ_str, "count": 1})
                         occ_vals = occ_resp.get("values", [])
                     if occ_vals:
                         det_body["occupationCode"] = {"id": occ_vals[0]["id"]}
@@ -1385,6 +1397,21 @@ def handle_register_supplier_invoice(base_url, token, e):
     # Find inbound VAT account (2710 for 25%)
     vat_acct_id = find_account_id(base_url, token, 2710)
 
+    # Find department if specified (receipt expenses often specify department)
+    dept_id = None
+    dept_name = e.get("department")
+    if dept_name:
+        _, dept_resp = tx_get(base_url, token, "/department", {"name": dept_name, "count": 1})
+        depts = dept_resp.get("values", [])
+        if depts:
+            dept_id = depts[0]["id"]
+        else:
+            # Create department
+            st_d, d_resp = tx_post(base_url, token, "/department", {"name": dept_name, "departmentNumber": 0})
+            dept_id = d_resp.get("value", {}).get("id")
+        if dept_id:
+            print(f"  department: {dept_name} id={dept_id}")
+
     print(f"  accounts: expense={acct_number}={expense_acct_id}, payable=2400={payable_acct_id}, vat=2710={vat_acct_id}")
     print(f"  amounts: net={net_amount}, vat={vat_amount}, total={total_incl}")
 
@@ -1410,6 +1437,7 @@ def handle_register_supplier_invoice(base_url, token, e):
         print(f"  using hardcoded input VAT {vat_pct}%: id={vat_type_id}")
 
     inv_date_str = e.get("invoiceDate") or today
+    dept_ref = {"id": dept_id} if dept_id else None
 
     # 2-posting format for supplierInvoice (with vatType — Tripletex handles VAT)
     si_postings = [
@@ -1421,6 +1449,7 @@ def handle_register_supplier_invoice(base_url, token, e):
             "amount": round(net_amount, 2), "amountCurrency": round(net_amount, 2), "amountGross": round(net_amount, 2),
             "amountGrossCurrency": round(net_amount, 2),
             "vatType": {"id": vat_type_id},
+            **({"department": dept_ref} if dept_ref else {}),
         },
         {
             "row": 2,
@@ -1442,6 +1471,7 @@ def handle_register_supplier_invoice(base_url, token, e):
             "account": {"id": expense_acct_id},
             "amount": round(net_amount, 2), "amountCurrency": round(net_amount, 2), "amountGross": round(net_amount, 2),
             "amountGrossCurrency": round(net_amount, 2),
+            **({"department": dept_ref} if dept_ref else {}),
         },
         {
             "row": 2,
@@ -1477,8 +1507,6 @@ def handle_register_supplier_invoice(base_url, token, e):
         "invoiceNumber": e.get("invoiceNumber") or "",
         "amountCurrency": round(total_incl, 2),
         "supplier": {"id": supplier_id} if supplier_id else None,
-        "currency": {"code": "NOK"},
-        "voucherDate": inv_date,
     }
     if si_minimal.get("supplier") is None:
         si_minimal.pop("supplier", None)
@@ -3344,7 +3372,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2355"
+BUILD_VERSION = "v20260322-0020"
 
 @app.get("/health")
 def health():
