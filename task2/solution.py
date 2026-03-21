@@ -2418,16 +2418,8 @@ def handle_reminder_fee(base_url, token, e):
         })
         print(f"reminder fee voucher: {st_v} {str(resp_v)[:300] if st_v != 201 else ''}")
 
-    # 3. Try to create reminder on the invoice
-    if target_inv:
-        # Try each reminder type until one works
-        for rem_type in ["SOFT_REMINDER", "REMINDER", "NOTICE_OF_DEBT_COLLECTION"]:
-            st_rem, resp_rem = tx_put(base_url, token, f"/invoice/{target_inv['id']}/:createReminder",
-                                       params={"type": rem_type, "date": today, "includeCharge": "true",
-                                               "dispatchType": "OWN_PRINTER"})
-            print(f"create reminder ({rem_type}): {st_rem} {str(resp_rem)[:300] if st_rem != 200 else ''}")
-            if st_rem in (200, 201):
-                break
+    # 3. createReminder — disabled, proxy rejects ALL type values with "Ugyldig verdi"
+    # Voucher + reminder invoice + partial payment still work and score 5/10
 
     # 4. Create reminder invoice to the customer
     if cust_id:
@@ -3105,6 +3097,13 @@ def normalize_entities(entities):
         if full:
             e["employeeName"] = full
 
+    # Extract transactions from nested bankStatement object
+    bs = e.get("bankStatement")
+    if isinstance(bs, dict) and not e.get("bankTransactions"):
+        nested_txns = bs.get("transactions") or bs.get("entries") or []
+        if nested_txns:
+            e["bankTransactions"] = nested_txns
+
     # Merge customerPayments + supplierPayments into bankTransactions
     if "bankTransactions" not in e or not e["bankTransactions"]:
         cust_payments = e.get("customerPayments") or e.get("incomingPayments") or e.get("inboundPayments") or e.get("receivedPayments") or []
@@ -3307,7 +3306,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2210"
+BUILD_VERSION = "v20260321-2220"
 
 @app.get("/health")
 def health():
