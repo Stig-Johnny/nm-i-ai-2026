@@ -925,6 +925,13 @@ def test_entity_normalizer_aliases():
     })
     assert e4.get("hoursLogged") == [{"employeeName": "Bob", "hours": 50}], "timeRegistrations → hoursLogged (regex)"
 
+    # Test incomingPayments → bankTransactions
+    e5 = normalize_entities({
+        "incomingPayments": [{"customerName": "Test AS", "amount": 1000}],
+        "outgoingPayments": [{"supplierName": "Vendor AS", "amount": 500}],
+    })
+    assert len(e5.get("bankTransactions", [])) == 2, "incomingPayments+outgoingPayments → bankTransactions"
+
 
 # ============================================================
 # Run
