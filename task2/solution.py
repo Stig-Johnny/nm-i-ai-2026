@@ -1367,6 +1367,30 @@ def handle_register_supplier_invoice(base_url, token, e):
         print(f"  using hardcoded input VAT {vat_pct}%: id={vat_type_id}")
 
     inv_date_str = e.get("invoiceDate") or today
+
+    # 2-posting format for supplierInvoice (with vatType — Tripletex handles VAT)
+    si_postings = [
+        {
+            "row": 1,
+            "date": inv_date_str,
+            "description": e.get("description") or "Leverandorfaktura",
+            "account": {"id": expense_acct_id},
+            "amountGross": round(net_amount, 2),
+            "amountGrossCurrency": round(net_amount, 2),
+            "vatType": {"id": vat_type_id},
+        },
+        {
+            "row": 2,
+            "date": inv_date_str,
+            "description": f"Leverandorgjeld {e.get('supplierName', '')}".strip(),
+            "account": {"id": payable_acct_id},
+            "amountGross": round(-total_incl, 2),
+            "amountGrossCurrency": round(-total_incl, 2),
+            "supplier": {"id": supplier_id} if supplier_id else None,
+        },
+    ]
+
+    # 3-posting format for raw voucher fallback (explicit VAT line — no vatType)
     postings = [
         {
             "row": 1,
@@ -1391,12 +1415,11 @@ def handle_register_supplier_invoice(base_url, token, e):
             "account": {"id": payable_acct_id},
             "amountGross": round(-total_incl, 2),
             "amountGrossCurrency": round(-total_incl, 2),
-            "supplier": {"id": supplier_id} if supplier_id else None,
         },
     ]
 
     # Remove None supplier refs
-    for p in postings:
+    for p in si_postings + postings:
         if p.get("supplier") is None:
             p.pop("supplier", None)
 
@@ -1412,7 +1435,7 @@ def handle_register_supplier_invoice(base_url, token, e):
         "voucher": {
             "date": inv_date,
             "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
-            "postings": postings,
+            "postings": si_postings,
         },
     }
     if si_body.get("supplier") is None:
@@ -3197,7 +3220,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-1825"
+BUILD_VERSION = "v20260321-1835"
 
 @app.get("/health")
 def health():
