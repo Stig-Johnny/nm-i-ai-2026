@@ -100,8 +100,11 @@ def run(prompt):
     return plan, mock
 
 
-def posts(mock, path_contains):
-    return [(m, p, b) for m, p, b in mock.calls if m == "POST" and path_contains in p]
+def posts(mock, path_contains, exclude=None):
+    results = [(m, p, b) for m, p, b in mock.calls if m == "POST" and path_contains in p]
+    if exclude:
+        results = [(m, p, b) for m, p, b in results if exclude not in p]
+    return results
 
 
 # ============================================================
@@ -757,7 +760,7 @@ def test_project_lifecycle_multi_employee():
     vouchers = posts(mock, "/ledger/voucher")
     assert len(vouchers) >= 1, "Should post supplier cost voucher"
     # Should create order + invoice
-    orders = posts(mock, "/order")
+    orders = posts(mock, "/order", exclude="/orderline")
     assert len(orders) >= 1, "Should create order"
 
 
@@ -824,7 +827,7 @@ def test_ledger_analysis():
          patch('task2.solution.tx_put', mock.put), \
          patch('task2.solution.tx_delete', mock.delete):
         execute_plan("http://test", "tok", plan, "")
-    projects = posts(mock, "/project")
+    projects = posts(mock, "/project", exclude="/orderline")
     activities = posts(mock, "/activity")
     # With mock data, may have 0 increases. At minimum the handler shouldn't crash.
     assert True  # No crash = pass
@@ -933,30 +936,6 @@ def test_entity_normalizer_aliases():
     assert len(e5.get("bankTransactions", [])) == 2, "incomingPayments+outgoingPayments → bankTransactions"
 
 
-# ============================================================
-# Run
-# ============================================================
-
-if __name__ == "__main__":
-    tests = sorted([f for f in dir() if f.startswith('test_') and callable(eval(f))])
-    passed = failed = 0
-    for t in tests:
-        try:
-            eval(f"{t}()")
-            passed += 1
-            doc = eval(f"{t}.__doc__") or ""
-            print(f"  PASS | {t}: {doc.strip()}")
-        except AssertionError as e:
-            print(f"  FAIL | {t}: {e}")
-            failed += 1
-        except Exception as e:
-            print(f"  ERR  | {t}: {type(e).__name__}: {e}")
-            failed += 1
-    print(f"\n{passed}/{passed+failed} passed")
-    if failed:
-        sys.exit(1)
-
-
 def test_C05_accounting_dimension_nn():
     """Competition: Accounting dimension Prosjekttype (scored 0/13)"""
     # This goes through LLM, can't test parsing offline. But we can verify the handler works.
@@ -1027,7 +1006,7 @@ def test_C07_invoice_multi_vat_de():
     assert result == True
     prod_posts = posts(mock, "/product")
     assert len(prod_posts) == 3, f"Expected 3 products, got {len(prod_posts)}"
-    ord_posts = posts(mock, "/order")
+    ord_posts = posts(mock, "/order", exclude="/orderline")
     assert len(ord_posts) == 1
     order_lines = ord_posts[0][2].get("orderLines", [])
     assert len(order_lines) == 3, f"Expected 3 order lines, got {len(order_lines)}"
@@ -1059,11 +1038,11 @@ def test_C08_project_fixed_price_invoice():
         result = handle_create_invoice("https://mock/v2", "tok", entities)
     assert result == True
     # Should have delegated to project_invoice — check project was created
-    proj_posts = posts(mock, "/project")
+    proj_posts = posts(mock, "/project", exclude="/orderline")
     assert len(proj_posts) >= 1, "Project should be created"
     assert proj_posts[0][2]["name"] == "Digital transformasjon"
     # Invoice should exist
-    ord_posts = posts(mock, "/order")
+    ord_posts = posts(mock, "/order", exclude="/orderline")
     assert len(ord_posts) >= 1, "Order should be created for invoice"
     # Invoice amount should be 75% of 203000 = 152250
     order_lines = ord_posts[0][2].get("orderLines", [])
@@ -1124,7 +1103,7 @@ def test_C10_invoice_product_code_in_description():
     assert "2618" in prod_numbers
     assert "8754" in prod_numbers
     # Descriptions should be cleaned (no code in parens)
-    ord_posts = posts(mock, "/order")
+    ord_posts = posts(mock, "/order", exclude="/orderline")
     descs = [ol.get("description", "") for ol in ord_posts[0][2].get("orderLines", [])]
     assert all("(" not in d for d in descs), f"Descriptions still have codes: {descs}"
 
@@ -1148,12 +1127,12 @@ def test_C11_project_invoice_fixed_price_order_has_project():
         result = handle_project_invoice("https://mock/v2", "tok", entities)
     assert result == True
     # Project must be created with correct name
-    proj = posts(mock, "/project")
+    proj = posts(mock, "/project", exclude="/orderline")
     assert len(proj) >= 1
     assert proj[0][2]["name"] == "Digital transformasjon", f"project name: {proj[0][2].get('name')}"
     assert proj[0][2].get("isFixedPrice") == True
     # Order must reference the project
-    ord_posts = posts(mock, "/order")
+    ord_posts = posts(mock, "/order", exclude="/orderline")
     assert len(ord_posts) >= 1
     assert ord_posts[0][2].get("project") is not None, "Order must reference project"
     # Invoice amount should be 50% of 318800 = 159400
@@ -1161,3 +1140,116 @@ def test_C11_project_invoice_fixed_price_order_has_project():
     assert len(order_lines) >= 1
     amount = order_lines[0].get("unitPriceExcludingVatCurrency", 0) * order_lines[0].get("count", 1)
     assert abs(amount - 159400) < 1, f"Invoice amount: {amount} != 159400"
+    # Project order line should be created for fixed-price projects
+    ol_posts = posts(mock, "/project/orderline")
+    assert len(ol_posts) >= 1, "Fixed-price project should create project order line"
+
+
+def test_C12_regex_whitelist_register_payment():
+    """Regex whitelist should handle register_payment without LLM."""
+    plan = regex_parse("Registrer betaling for faktura til kunden Nordvik AS (org.nr 955123456) på 25000 kr.")
+    assert plan is not None, "regex_parse should handle register_payment"
+    assert plan["task_type"] == "register_payment"
+    assert plan["entities"]["customerName"] is not None
+    assert plan["entities"]["amount"] == 25000.0
+
+
+def test_C13_regex_whitelist_create_invoice():
+    """Regex whitelist should handle create_invoice without LLM."""
+    plan = regex_parse("Opprett og send en faktura til kunden Havblikk AS (org.nr 987654321) på 15000 NOK uten MVA. Fakturaen gjelder Konsulentbistand.")
+    assert plan is not None, "regex_parse should handle create_invoice"
+    assert plan["task_type"] == "create_invoice"
+    assert plan["entities"]["customerOrgNumber"] == "987654321"
+    assert plan["entities"]["lines"][0]["unitPrice"] == 15000.0
+    assert "Konsulentbistand" in plan["entities"]["lines"][0]["description"]
+
+
+def test_C14_regex_whitelist_register_supplier_invoice():
+    """Regex whitelist should handle register_supplier_invoice without LLM."""
+    plan = regex_parse("Vi har mottatt faktura INV-2026-1234 fra leverandøren Solvik AS (org.nr 983514650) på 42100 kr inklusiv MVA. Beløpet gjelder kontortjenester (konto 6540). Registrer leverandørfakturaen med korrekt inngående MVA (25 %).")
+    assert plan is not None, "regex_parse should handle register_supplier_invoice"
+    assert plan["task_type"] == "register_supplier_invoice"
+    assert plan["entities"]["invoiceNumber"] == "INV-2026-1234"
+    assert plan["entities"]["totalAmountInclVat"] == 42100.0
+    assert plan["entities"]["vatRate"] == 25
+    assert plan["entities"]["accountNumber"] == 6540
+
+
+def test_C15_project_invoice_fixed_price_portuguese():
+    """Competition: Portuguese fixed-price project with milestone billing."""
+    from task2.solution import handle_project_invoice, normalize_entities
+    mock = APIMock()
+    entities = normalize_entities({
+        "projectName": "Segurança de dados",
+        "customerName": "Luz do Sol Lda",
+        "customerOrgNumber": "861443299",
+        "projectManagerName": "Mariana Ferreira",
+        "projectManagerEmail": "mariana.ferreira@example.org",
+        "fixedPrice": 122800,
+        "invoicePercentage": 75,
+    })
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        result = handle_project_invoice("https://mock/v2", "tok", entities)
+    assert result == True
+    proj = posts(mock, "/project", exclude="/orderline")
+    assert proj[0][2].get("isFixedPrice") == True
+    assert proj[0][2].get("fixedprice") == 122800
+    # Order line amount: 75% of 122800 = 92100
+    ord_posts = posts(mock, "/order", exclude="/orderline")
+    order_lines = ord_posts[0][2].get("orderLines", [])
+    amount = order_lines[0].get("unitPriceExcludingVatCurrency", 0) * order_lines[0].get("count", 1)
+    assert abs(amount - 92100) < 1, f"Invoice amount: {amount} != 92100"
+    # Project order line created
+    ol_posts = posts(mock, "/project/orderline")
+    assert len(ol_posts) >= 1, "Should create project order line for fixed-price"
+
+
+def test_C16_regex_payment_multilingual():
+    """Regex payment parsing in multiple languages."""
+    prompts = [
+        ("Register payment for invoice to customer Nordvik AS on 25000 kr.", "register_payment"),
+        ("Registrer betaling for faktura til kunden Fjelltopp AS på 18500 kr.", "register_payment"),
+        ("Registrieren Sie die Zahlung für die Rechnung an Kunden Bergwerk GmbH über 32000 kr.", "register_payment"),
+    ]
+    for prompt, expected_type in prompts:
+        plan = regex_parse(prompt)
+        assert plan is not None, f"No parse for: {prompt[:50]}"
+        assert plan["task_type"] == expected_type, f"Expected {expected_type}, got {plan['task_type']} for: {prompt[:50]}"
+
+
+def test_C17_regex_invoice_multilingual():
+    """Regex invoice parsing in multiple languages."""
+    prompts = [
+        "Crea y envía una factura al cliente Luna SL (org. nº 844920520) por 20200 NOK sin IVA. La factura es por Servicio de red.",
+        "Créez et envoyez une facture au client Dupont SARL (org. nº 955123456) de 30000 NOK. La facture concerne Conseil informatique.",
+    ]
+    for prompt in prompts:
+        plan = regex_parse(prompt)
+        assert plan is not None, f"No parse for: {prompt[:50]}"
+        assert plan["task_type"] == "create_invoice", f"Expected create_invoice, got {plan.get('task_type')} for: {prompt[:50]}"
+
+
+# ============================================================
+# Run
+# ============================================================
+
+if __name__ == "__main__":
+    tests = sorted([f for f in dir() if f.startswith('test_') and callable(eval(f))])
+    passed = failed = 0
+    for t in tests:
+        try:
+            eval(f"{t}()")
+            passed += 1
+            doc = eval(f"{t}.__doc__") or ""
+            print(f"  PASS | {t}: {doc.strip()}")
+        except AssertionError as e:
+            print(f"  FAIL | {t}: {e}")
+            failed += 1
+        except Exception as e:
+            print(f"  ERR  | {t}: {type(e).__name__}: {e}")
+            failed += 1
+    print(f"\n{passed}/{passed+failed} passed")
+    if failed:
+        sys.exit(1)

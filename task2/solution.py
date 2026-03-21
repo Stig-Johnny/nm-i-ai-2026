@@ -2200,13 +2200,26 @@ def handle_project_invoice(base_url, token, e):
                         "date": today, "description": f"Prosjektkostnad {sc_name or ''}".strip(), "postings": postings})
                     print(f"supplier cost voucher: {st_sc} amount={sc_amount} {str(resp_sc)[:200] if st_sc != 201 else ''}")
 
-    # Step 7: Create invoice
-    ensure_bank_account(base_url, token)
-
-    # Handle fixed price projects
+    # Step 6c: Register project order lines for fixed-price milestone tracking
     fixed_price = float(e.get("fixedPrice") or 0)
     invoice_pct = float(e.get("invoicePercentage") or 100)
     invoice_amount = float(e.get("invoiceAmount") or 0)
+
+    if fixed_price and proj_id:
+        # Try to set project order lines for the fixed price contract
+        try:
+            ol_body = {
+                "project": {"id": proj_id},
+                "description": proj_name,
+                "amountOrderLinesCurrency": fixed_price,
+            }
+            st_ol, resp_ol = tx_post(base_url, token, "/project/orderline", ol_body)
+            print(f"project order line: {st_ol} amount={fixed_price} {str(resp_ol)[:200] if st_ol != 201 else ''}")
+        except Exception as e_ol:
+            print(f"project order line error: {e_ol}")
+
+    # Step 7: Create invoice
+    ensure_bank_account(base_url, token)
 
     if fixed_price:
         total_amount = invoice_amount or (fixed_price * invoice_pct / 100)
@@ -2218,12 +2231,20 @@ def handle_project_invoice(base_url, token, e):
         total_amount = float(e.get("totalAmount", 0))
         desc = proj_name
 
-    order_lines = [{
-        "description": desc,
-        "unitPriceExcludingVatCurrency": hourly_rate or total_amount,
-        "count": hours or 1.0,
-        "vatType": {"id": 3},  # 25% standard Norwegian VAT
-    }]
+    if hours and hourly_rate:
+        order_lines = [{
+            "description": desc,
+            "unitPriceExcludingVatCurrency": hourly_rate,
+            "count": hours,
+            "vatType": {"id": 3},  # 25% standard Norwegian VAT
+        }]
+    else:
+        order_lines = [{
+            "description": desc,
+            "unitPriceExcludingVatCurrency": total_amount,
+            "count": 1.0,
+            "vatType": {"id": 3},  # 25% standard Norwegian VAT
+        }]
 
     due = str(date.today() + timedelta(days=30))
     order_body = {
@@ -3285,6 +3306,7 @@ async def _solve_inner(request: Request):
         if plan and plan.get("task_type") not in (
             "create_department", "create_product", "create_customer", "create_employee",
             "create_supplier", "create_project", "run_payroll",
+            "register_payment", "create_invoice", "register_supplier_invoice",
         ):
             plan = None  # Complex task — delegate to LLM
     if plan:
@@ -3309,7 +3331,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2255"
+BUILD_VERSION = "v20260321-2310"
 
 @app.get("/health")
 def health():
