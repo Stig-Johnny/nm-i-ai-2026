@@ -595,8 +595,8 @@ def test_reminder_fee():
     assert len(puts) >= 1, "Should register partial payment"
 
 
-def test_receipt_expense_single_item():
-    """Receipt expense: single item with explicit 3-posting (net+VAT+credit)"""
+def test_receipt_expense_delegates_to_supplier_invoice():
+    """Receipt expense: delegates to supplier invoice handler"""
     from task2.solution import execute_plan
     mock = APIMock()
     plan = {
@@ -611,13 +611,12 @@ def test_receipt_expense_single_item():
          patch('task2.solution.tx_put', mock.put), \
          patch('task2.solution.tx_delete', mock.delete):
         execute_plan("http://test", "tok", plan, "")
-    vouchers = posts(mock, "/ledger/voucher")
-    assert len(vouchers) >= 1, "Should post receipt voucher"
-    v_postings = vouchers[0][2].get("postings", [])
-    assert len(v_postings) == 3, f"Should have 3 postings (net+VAT+credit), got {len(v_postings)}"
-    # Net amount should be 14100/1.12 ≈ 12589.29 (since 14100 = totalAmount = gross)
-    expense = [p for p in v_postings if p.get("amountGross", 0) > 0 and p.get("amountGross", 0) > 2000]
-    assert len(expense) >= 1, "Should have expense posting"
+    # Should create supplierInvoice (not just raw voucher)
+    si = posts(mock, "/supplierInvoice")
+    assert len(si) >= 1, "Should POST to /supplierInvoice"
+    # supplierInvoice body should have correct invoice data
+    si_body = si[0][2]
+    assert si_body.get("invoiceNumber"), "Should have invoice number"
 
 
 def test_currency_payment_with_loss():

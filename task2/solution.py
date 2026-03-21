@@ -2887,109 +2887,47 @@ def handle_correct_ledger_errors(base_url, token, e):
 
 
 def handle_register_receipt_expense(base_url, token, e):
-    """Register expense from a receipt as a voucher with correct account and VAT."""
-    today = str(date.today())
-    receipt_date = e.get("date") or today
+    """Register receipt expense — delegate to supplier invoice handler."""
+    # Convert receipt entity to supplier invoice format
+    si = dict(e)
 
-    # Input VAT type IDs (for purchases/expenses)
-    NOK_VAT_IN = {"25": 1, "15": 11, "12": 12, "0": 0}
+    # Map receipt-specific fields to supplier invoice fields
+    items = si.get("items") or si.get("lines") or []
+    total_incl = float(si.get("totalAmountInclVat") or si.get("totalAmount") or 0)
+    total_vat = float(si.get("vatAmount") or 0)
 
-    # Find or create department
-    dept_name = e.get("department") or e.get("departmentName")
-    dept_id = None
-    if dept_name:
-        _, dept_resp = tx_get(base_url, token, "/department", {"name": dept_name, "fields": "id,name", "count": 1})
-        dept_vals = dept_resp.get("values", [])
-        if dept_vals:
-            dept_id = dept_vals[0]["id"]
-        else:
-            st_d, resp_d = tx_post(base_url, token, "/department", {"name": dept_name})
-            dept_id = resp_d.get("value", {}).get("id")
-
-    # Build voucher postings from items or total
-    items = e.get("items") or e.get("lines") or []
-    total_incl = float(e.get("totalAmountInclVat") or e.get("totalAmount") or 0)
-    total_vat = float(e.get("vatAmount") or 0)
-    description = e.get("description") or e.get("supplierName") or "Kvittering"
-
-    # If no items but we have total, create a single posting
-    if not items and total_incl:
-        vat_rate = str(int(e.get("vatRate") or 25))
-        acct_num = int(e.get("accountNumber") or 6540)
-        items = [{"description": description, "amount": total_incl - total_vat, "vatRate": vat_rate, "accountNumber": acct_num}]
-
-    postings = []
-    row = 1
-    total_credit = 0
-    vat_acct_id = find_account_id(base_url, token, 2710)
-    for item in items:
-        amt = float(item.get("amount") or item.get("unitPrice") or 0)
-        if not amt:
-            continue
-        acct_num = int(item.get("accountNumber") or e.get("accountNumber") or 6540)
-        vat_pct = float(item.get("vatRate") or e.get("vatRate") or 25)
-        acct_id = find_account_id(base_url, token, acct_num)
-        if not acct_id:
-            acct_id = find_account_id(base_url, token, 6540)
-
-        # Determine net and VAT amounts
-        # amt could be gross (incl VAT) or net — check against totalAmount
+    # Compute net/vat from items if not set
+    if items and not si.get("netAmount"):
+        item = items[0]
+        amt = float(item.get("amount") or 0)
+        vat_pct = float(item.get("vatRate") or si.get("vatRate") or 25)
         if total_incl and abs(amt - total_incl) < 1:
-            # amt equals total → it's gross incl VAT
-            net_amt = round(amt / (1 + vat_pct / 100), 2)
-            vat_amt = round(amt - net_amt, 2)
-        elif total_vat and total_incl:
-            # Use provided VAT directly
-            net_amt = round(amt, 2)
-            vat_amt = round(total_vat, 2) if len(items) == 1 else round(amt * vat_pct / 100, 2)
+            # Item amount is gross
+            si["netAmount"] = round(amt / (1 + vat_pct / 100), 2)
+            si["vatAmount"] = round(amt - si["netAmount"], 2)
+            si["totalAmountInclVat"] = amt
         else:
-            net_amt = round(amt, 2)
-            vat_amt = round(amt * vat_pct / 100, 2)
+            si["netAmount"] = amt
+            si["vatAmount"] = total_vat or round(amt * vat_pct / 100, 2)
+            si["totalAmountInclVat"] = total_incl or round(amt * (1 + vat_pct / 100), 2)
 
-        # Expense posting (net)
-        expense_posting = {
-            "row": row, "date": receipt_date,
-            "description": item.get("description", description),
-            "account": {"id": acct_id},
-            "amountGross": net_amt,
-            "amountGrossCurrency": net_amt,
-        }
-        if dept_id:
-            expense_posting["department"] = {"id": dept_id}
-        postings.append(expense_posting)
-        row += 1
+    if not si.get("vatRate"):
+        si["vatRate"] = items[0].get("vatRate", 25) if items else 25
 
-        # VAT posting
-        if vat_amt > 0 and vat_acct_id:
-            postings.append({
-                "row": row, "date": receipt_date,
-                "description": f"Inngående MVA {int(vat_pct)}%",
-                "account": {"id": vat_acct_id},
-                "amountGross": vat_amt,
-                "amountGrossCurrency": vat_amt,
-            })
-            row += 1
+    # Use item's account number
+    if items and not si.get("accountNumber"):
+        si["accountNumber"] = items[0].get("accountNumber") or 6540
 
-        total_credit += net_amt + vat_amt
+    # Ensure supplier name
+    if not si.get("supplierName"):
+        si["supplierName"] = si.get("storeName") or si.get("merchant") or si.get("vendor") or "Kvittering"
 
-    # Credit posting (bank/card account)
-    bank_id = find_account_id(base_url, token, 1920)
-    postings.append({
-        "row": row, "date": receipt_date,
-        "description": description,
-        "account": {"id": bank_id},
-        "amountGross": round(-total_credit, 2),
-        "amountGrossCurrency": round(-total_credit, 2),
-    })
+    # Generate invoice number from date
+    if not si.get("invoiceNumber"):
+        si["invoiceNumber"] = f"KVITT-{si.get('date', str(date.today()))}"
 
-    voucher_body = {
-        "date": receipt_date,
-        "description": f"Kvittering {description}",
-        "postings": postings,
-    }
-    st, resp = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", voucher_body)
-    print(f"receipt voucher: {st} {str(resp)[:300]}")
-    return st in (200, 201)
+    print(f"receipt → supplier invoice: net={si.get('netAmount')} vat={si.get('vatAmount')} total={si.get('totalAmountInclVat')} acct={si.get('accountNumber')}")
+    return handle_register_supplier_invoice(base_url, token, si)
 
 
 HANDLERS = {
@@ -3293,7 +3231,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2035"
+BUILD_VERSION = "v20260321-2045"
 
 @app.get("/health")
 def health():
