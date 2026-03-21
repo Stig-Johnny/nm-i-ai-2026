@@ -1470,37 +1470,33 @@ def handle_register_supplier_invoice(base_url, token, e):
     inv_date = e.get("invoiceDate") or today
     inv_due = e.get("invoiceDueDate") or str(date.today() + timedelta(days=30))
 
-    # Create supplier invoice — try WITHOUT amountCurrency first (it causes 500 in proxy)
-    si_body = {
+    # Try 1: Minimal SI without voucher (proxy may reject inline vouchers)
+    si_minimal = {
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
         "invoiceNumber": e.get("invoiceNumber") or "",
-        "amountCurrency": round(total_incl, 2),  # Only writable amount field
+        "amountCurrency": round(total_incl, 2),
         "supplier": {"id": supplier_id} if supplier_id else None,
-        "voucher": {
-            "date": inv_date,
-            "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
-            "postings": si_postings,
-        },
     }
-    if si_body.get("supplier") is None:
-        si_body.pop("supplier", None)
+    if si_minimal.get("supplier") is None:
+        si_minimal.pop("supplier", None)
 
-    st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
-    print(f"supplierInvoice (no amount): {st} {str(resp)[:300]}")
+    st, resp = tx_post(base_url, token, "/supplierInvoice", si_minimal)
+    print(f"supplierInvoice (minimal): {st} {str(resp)[:300]}")
 
     if st in (200, 201):
         val = resp.get("value", {})
-        si_id = val.get("id")
-        print(f"  amount={val.get('amount')} amountCurrency={val.get('amountCurrency')} id={si_id}")
-
-        # Note: voucher postings can't be updated after creation ("Can not put postings on a voucher that already have postings")
+        print(f"  amount={val.get('amount')} amountCurrency={val.get('amountCurrency')} id={val.get('id')}")
         return True
 
-    # Try WITH amountCurrency as fallback
-    si_body["amountCurrency"] = round(total_incl, 2)
-    st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
-    print(f"supplierInvoice (with amount): {st} {str(resp)[:300]}")
+    # Try 2: With inline voucher
+    si_minimal["voucher"] = {
+        "date": inv_date,
+        "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
+        "postings": si_postings,
+    }
+    st, resp = tx_post(base_url, token, "/supplierInvoice", si_minimal)
+    print(f"supplierInvoice (with voucher): {st} {str(resp)[:300]}")
 
     if st in (200, 201):
         return True
@@ -3304,7 +3300,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2240"
+BUILD_VERSION = "v20260321-2250"
 
 @app.get("/health")
 def health():
