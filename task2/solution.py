@@ -1320,14 +1320,20 @@ def handle_register_supplier_invoice(base_url, token, e):
         si_body.pop("supplier", None)
 
     st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
-    print(f"supplierInvoice: {st} {str(resp)[:200]}")
+    print(f"supplierInvoice: {st} {str(resp)[:500]}")
 
-    # If 500 (amountCurrency not supported), retry without it
+    # If 500, retry same body (likely timing issue with supplier creation)
+    if st == 500:
+        import time as _t; _t.sleep(1)
+        st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
+        print(f"supplierInvoice (retry same): {st} {str(resp)[:200]}")
+
+    # Last resort: retry without amountCurrency
     if st == 500:
         si_body.pop("amountCurrency", None)
         si_body.pop("currency", None)
         st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
-        print(f"supplierInvoice (retry): {st} {str(resp)[:200]}")
+        print(f"supplierInvoice (retry no amount): {st} {str(resp)[:200]}")
 
     if st in (200, 201):
         return True
