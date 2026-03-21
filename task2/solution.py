@@ -3040,10 +3040,10 @@ def normalize_entities(entities):
         "dailyWorkingHours": ["workingHoursPerDay", "hoursPerDay", "arbeidstimer"],
         "employmentPercentage": ["percentageOfFullTimeEquivalent", "stillingsprosent"],
         # Currency
-        "currencyGainNOK": ["currencyGain", "exchangeRateGain", "exchangeRateGainNOK", "agio", "kursgewinn"],
-        "currencyLossNOK": ["currencyLoss", "exchangeRateLoss", "exchangeRateLossNOK", "disagio", "kursverlust"],
-        "paymentAmountNOK": ["paymentAmount", "paidAmountNOK"],
-        "exchangeDifferenceAccount": ["fxAccount", "currencyAccount", "gainLossAccount", "differenceAccount"],
+        "currencyGainNOK": ["currencyGain", "exchangeRateGain", "exchangeRateGainNOK", "exchangeGainAmount", "agio", "kursgewinn", "forexGain"],
+        "currencyLossNOK": ["currencyLoss", "exchangeRateLoss", "exchangeRateLossNOK", "exchangeLossAmount", "disagio", "kursverlust", "forexLoss"],
+        "paymentAmountNOK": ["paymentAmount", "paidAmountNOK", "paymentAmountNok", "invoiceAmountNok"],
+        "exchangeDifferenceAccount": ["fxAccount", "currencyAccount", "gainLossAccount", "differenceAccount", "exchangeLossAccount", "exchangeGainAccount"],
         # Hours / timesheet
         "hoursLogged": ["hourEntries", "timeEntries", "timeLogs", "hoursRecorded", "timesheet"],
         # Transactions
@@ -3250,7 +3250,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2000"
+BUILD_VERSION = "v20260321-2010"
 
 @app.get("/health")
 def health():
