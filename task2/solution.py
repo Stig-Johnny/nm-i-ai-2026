@@ -1046,10 +1046,30 @@ def handle_delete_travel_expense(base_url, token, e):
 def handle_register_payment(base_url, token, e):
     today = str(date.today())
 
-    # Find invoice
-    params = {"invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-12-31", "count": 50}
-    _, inv_resp = tx_get(base_url, token, "/invoice", params)
+    # Step 1: find customer to filter invoices correctly
+    cust_id = None
+    cust_name = e.get("customerName") or e.get("customer")
+    cust_org = e.get("customerOrgNumber") or e.get("organizationNumber")
+    if cust_org or cust_name:
+        cust_id = get_or_create_customer(base_url, token, name=cust_name, org_number=cust_org)
+
+    # Step 2: find the right invoice — filter by customer if we have one
+    inv_params = {"invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-12-31",
+                  "count": 50, "fields": "id,customerId,amountCurrency,amountOutstandingTotal,invoiceNumber"}
+    if cust_id:
+        inv_params["customerId"] = cust_id
+    _, inv_resp = tx_get(base_url, token, "/invoice", inv_params)
     invoices = inv_resp.get("values", [])
+
+    # If customer filter returned nothing, fall back to all invoices
+    if not invoices and cust_id:
+        inv_params.pop("customerId", None)
+        _, inv_resp = tx_get(base_url, token, "/invoice", inv_params)
+        invoices = inv_resp.get("values", [])
+        # Then filter client-side
+        if cust_id:
+            invoices = [i for i in invoices if i.get("customerId") == cust_id] or invoices
+
     if not invoices:
         print("No invoices found")
         return False
@@ -1061,23 +1081,25 @@ def handle_register_payment(base_url, token, e):
 
     invoice = invoices[0]
     inv_id = invoice["id"]
-        # Payment should be the TOTAL amount (including VAT), not the net amount
-    amount = e.get("paidAmount") or e.get("totalAmountInclVat") or e.get("totalAmount") or e.get("amount")
-    if not amount:
-        # If only netAmount given, calculate total with VAT
-        net = float(e.get("netAmount") or 0)
-        vat_rate = float(e.get("vatRate") or 25)
-        if net:
-            amount = net * (1 + vat_rate / 100)
-    if not amount:
-        amount = invoice.get("amountCurrency", 0)
 
+    # Step 3: use invoice's own outstanding/total amount — NOT the net amount from the prompt
+    # Prompt amount is typically excl. VAT; payment must be total incl. VAT
+    amount = (invoice.get("amountOutstandingTotal")
+              or invoice.get("amountCurrency")
+              or e.get("paidAmount")
+              or e.get("totalAmountInclVat"))
+    if not amount:
+        net = float(e.get("amount") or e.get("netAmount") or 0)
+        vat_rate = float(e.get("vatRate") or 25)
+        amount = net * (1 + vat_rate / 100) if net else 0
+
+    print(f"register_payment: invoice id={inv_id} amount={amount} pt={pt_id}")
     st, resp = tx_put(base_url, token, f"/invoice/{inv_id}/:payment", params={
         "paymentDate": e.get("date") or e.get("paymentDate") or today,
         "paymentTypeId": pt_id,
         "paidAmount": float(amount),
     })
-    print(f"register_payment: {st} {str(resp)[:200]}")
+    print(f"register_payment result: {st} {str(resp)[:200]}")
     return st in (200, 201)
 
 
