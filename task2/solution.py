@@ -1474,6 +1474,10 @@ def handle_register_supplier_invoice(base_url, token, e):
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
         "invoiceNumber": e.get("invoiceNumber") or "",
+        "amount": round(total_incl, 2),
+        "amountCurrency": round(total_incl, 2),
+        "amountExcludingVat": round(net_amount, 2),
+        "amountExcludingVatCurrency": round(net_amount, 2),
         "supplier": {"id": supplier_id} if supplier_id else None,
         "voucher": {
             "date": inv_date,
@@ -3271,7 +3275,16 @@ async def solve(request: Request):
 
     # Try regex first (fast, no LLM call), fall back to LLM
     # Skip regex if files are attached — need LLM to read PDF/image content
-    plan = regex_parse(prompt) if not files else None
+    # Only use regex for unambiguous simple tasks to avoid misclassification
+    plan = None
+    if not files:
+        plan = regex_parse(prompt)
+        # Whitelist: only trust regex for simple single-step tasks
+        if plan and plan.get("task_type") not in (
+            "create_department", "create_product", "create_customer", "create_employee",
+            "create_supplier", "create_project", "run_payroll",
+        ):
+            plan = None  # Complex task — delegate to LLM
     if plan:
         print(f"REGEX PARSE: {plan.get('task_type', '?')}")
     else:
@@ -3294,7 +3307,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2200"
+BUILD_VERSION = "v20260321-2210"
 
 @app.get("/health")
 def health():
