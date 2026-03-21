@@ -578,6 +578,10 @@ def test_year_end_closing_monthly():
 
 def test_reminder_fee():
     """Reminder fee: finds overdue invoice, posts fee voucher with customer, registers partial payment"""
+    # Verify regex does NOT catch reminder prompts (should go to LLM)
+    from task2.solution import regex_parse
+    r = regex_parse("L'un de vos clients a une facture en retard. Trouvez la facture en retard et enregistrez des frais de rappel de 50 NOK.")
+    assert r is None, f"Reminder prompt should NOT be regex-parsed (got {r.get('task_type') if r else None})"
     from task2.solution import execute_plan
     mock = APIMock()
     plan = {
