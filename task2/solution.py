@@ -936,32 +936,12 @@ def handle_create_travel_expense(base_url, token, e):
             print(f"  rateTypes for cat {per_diem_cat['id']}: {[(r['id'], r.get('rate',''), r.get('zone','')) for r in rate_types[:5]]}")
 
         if per_diem_cat:
-            # Tripletex derives `count` (days) from startDate/endDate — don't set count directly
-            pd_start = e.get("startDate") or e.get("date") or today
-            # endDate = startDate + (days - 1)
-            from datetime import date as _date, timedelta as _td
-            try:
-                pd_start_dt = _date.fromisoformat(pd_start)
-            except Exception:
-                pd_start_dt = _date.today()
-            pd_end_dt = pd_start_dt + _td(days=max(diet_days - 1, 0))
-            pd_end = pd_end_dt.isoformat()
-
-            overnight = "NONE"
-            if travel_days > 1:
-                overnight = "HOTEL"  # default to HOTEL for multi-day trips
-            if e.get("accommodation") and "town" in str(e.get("accommodation")).lower():
-                overnight = "TOWN_ACCOMMODATION"
-
             pd_body = {
                 "travelExpense": {"id": te_id},
                 "rateCategory": {"id": per_diem_cat["id"]},
                 "countryCode": "NO",
-                "overnightAccommodation": overnight,
+                "overnightAccommodation": "HOTEL" if travel_days > 1 else "NONE",
                 "location": destination or "Norge",
-                "startDate": pd_start,
-                "endDate": pd_end,
-                # DO NOT set count — Tripletex derives it from startDate/endDate
                 "isDeductionForBreakfast": False,
                 "isDeductionForLunch": False,
                 "isDeductionForDinner": False,
@@ -1029,9 +1009,9 @@ def handle_create_travel_expense(base_url, token, e):
         st_c, cr = tx_post(base_url, token, "/travelExpense/cost", cost_body)
         print(f"  cost '{desc}' {amt}: {st_c}")
 
-    # Deliver the travel expense — ID in path, not query param
-    st_del, resp_del = tx_put(base_url, token, f"/travelExpense/{te_id}/:deliver", {})
-    print(f"deliver travel expense: {st_del} {str(resp_del)[:300] if st_del not in (200,204) else ''}")
+    # Deliver the travel expense
+    st_del, resp_del = tx_put(base_url, token, f"/travelExpense/{te_id}/:deliver")
+    print(f"deliver travel expense: {st_del} {str(resp_del)[:300] if st_del != 200 else ''}")
 
     return True
 
@@ -1790,16 +1770,20 @@ def handle_project_invoice(base_url, token, e):
         total_amount = float(e.get("totalAmount", 0))
         desc = proj_name
 
+    NOK_VAT_OUT = {"25": 3, "15": 31, "12": 32, "0": 6}
+    vat_pct = str(e.get("vatRate") or "25").replace("%", "").strip().split(".")[0]
     order_lines = [{
         "description": desc,
-        "unitPriceExcludingVatCurrency": hourly_rate or total_amount,
+        "unitPriceExcludingVatCurrency": total_amount,  # fixed: was `hourly_rate or total_amount` (hourly_rate=0 falsified)
         "count": hours or 1.0,
+        "vatType": {"id": NOK_VAT_OUT.get(vat_pct, 3)},  # always set VAT — was missing for fixed-price
     }]
 
+    due_date = e.get("invoiceDueDate") or e.get("dueDate") or str(date.today() + timedelta(days=30))
     order_body = {
         "customer": {"id": customer_id} if customer_id else None,
         "orderDate": today,
-        "deliveryDate": today,
+        "deliveryDate": due_date,  # deliveryDate = invoice due date
         "orderLines": order_lines,
     }
     if order_body.get("customer") is None:
@@ -1812,20 +1796,21 @@ def handle_project_invoice(base_url, token, e):
     print(f"create order: {st_ord} id={order_id}")
 
     if order_id:
-        due_date = str(date.today() + timedelta(days=30))
+        # Pass invoiceDueDate directly as param — avoids separate GET+PUT
         st_inv, inv_resp = tx_put(base_url, token, f"/order/{order_id}/:invoice", {},
-                                   params={"invoiceDate": today, "sendToCustomer": "false"})
-        inv_id = inv_resp.get("value", {}).get("id")
-        print(f"order->invoice: {st_inv} id={inv_id} {str(inv_resp)[:200]}")
+                                   params={"invoiceDate": today, "invoiceDueDate": due_date,
+                                           "sendToCustomer": "false"})
+        inv_id = inv_resp.get("value", {}).get("id") if isinstance(inv_resp, dict) else None
+        print(f"order->invoice: {st_inv} id={inv_id}")
 
-        # Set invoiceDueDate and send
         if inv_id:
-            inv_update = {"id": inv_id, "invoiceDueDate": due_date}
-            st_upd, _ = tx_put(base_url, token, f"/invoice/{inv_id}", inv_update)
-            print(f"set invoiceDueDate: {st_upd}")
-
-            # Send invoice
-            st_send, _ = tx_put(base_url, token, f"/invoice/{inv_id}/:send", params={"sendType": "EMAIL"})
+            # Send invoice — try EHF first (Norwegian Peppol), fall back to EMAIL
+            for stype in (["EHF"] if cust_org else []) + ["EMAIL"]:
+                st_send, _ = tx_put(base_url, token, f"/invoice/{inv_id}/:send",
+                                    params={"sendType": stype})
+                print(f"send ({stype}): {st_send}")
+                if st_send in (200, 201, 204):
+                    break
             print(f"send invoice: {st_send}")
 
     return True
