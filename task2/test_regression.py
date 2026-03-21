@@ -34,7 +34,8 @@ class APIMock:
             org = (params or {}).get("organizationNumber", "")
             if org:
                 return 200, {"values": [{"id": 5001, "name": "Customer"}]}
-            return 200, {"values": []}
+            # Return some customers for name-based search
+            return 200, {"values": [{"id": 5001, "name": "Lunde AS"}, {"id": 5002, "name": "Eide AS"}]}
         if "/supplier" in path: return 200, {"values": []}
         if "/invoice/paymentType" in path: return 200, {"values": [{"id": 99}]}
         if "/travelExpense/costCategory" in path:
@@ -56,9 +57,10 @@ class APIMock:
             ]}
         if "/ledger/account" in path:
             num = int((params or {}).get("number", 0))
-            accts = {1920: 500, 2400: 501, 2710: 502, 5000: 503, 6540: 504, 7000: 505}
+            accts = {1209: 499, 1700: 498, 1720: 497, 1920: 500, 2400: 501, 2710: 502, 2900: 506, 2920: 507, 4300: 508, 4500: 509, 5000: 503, 6010: 510, 6540: 504, 6590: 511, 6800: 512, 6860: 513, 7000: 505, 7140: 514, 8060: 516, 8160: 517, 8700: 515}
             aid = accts.get(num)
             return 200, {"values": [{"id": aid, "number": num, "name": f"Acct {num}", "bankAccountNumber": "86010517941"}] if aid else []}
+        if "/ledger/vatType" in path: return 200, {"values": [{"id": 1, "name": "Inngående mva 25%", "percentage": 25}]}
         if "/activity" in path: return 200, {"values": [{"id": 77, "name": "Fakturerbart arbeid"}]}
         if "/invoice" in path and "paymentType" not in path:
             cust_id = (params or {}).get("customerId")
@@ -449,6 +451,80 @@ def test_invoice_with_payment_correction():
     assert any("/order" in p for p in post_paths), "Should create order"
     assert any(":invoice" in p for p in put_paths), "Should convert to invoice"
     assert any(":payment" in p for p in put_paths), "Should register payment"
+
+
+def test_bank_reconciliation_with_transactions():
+    """Bank reconciliation: processes bankTransactions, registers payments"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "bank_reconciliation",
+        "entities": {
+            "bankTransactions": [
+                {"date": "2026-01-16", "description": "Innbetaling Lunde AS", "amount": 4750.0,
+                 "customerName": "Lunde AS", "invoiceNumber": "1001"},
+                {"date": "2026-01-20", "description": "Utbetaling Havbris AS", "amount": -3200.0,
+                 "supplierName": "Havbris AS"},
+            ]
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    # Should register customer payment
+    puts = [(m, p, b) for m, p, b in mock.calls if m == "PUT" and ":payment" in p]
+    assert len(puts) >= 1, "Should register at least one customer payment"
+    # Should post supplier payment voucher
+    vouchers = posts(mock, "/ledger/voucher")
+    assert len(vouchers) >= 1, "Should post supplier payment voucher"
+
+
+def test_correct_ledger_errors_all_types():
+    """Ledger correction: all 4 error types produce vouchers"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "correct_ledger_errors",
+        "entities": {
+            "errors": [
+                {"errorType": "wrong_account", "wrongAccount": "6860", "correctAccount": "6590", "amount": 5550},
+                {"errorType": "duplicate", "wrongAccount": "6860", "amount": 4000},
+                {"errorType": "missing_vat", "wrongAccount": "4500", "amount": 13450, "vatAccount": "2710"},
+                {"errorType": "wrong_amount", "wrongAccount": "6860", "amount": 16600, "correctAmount": 9600},
+            ]
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    vouchers = posts(mock, "/ledger/voucher")
+    assert len(vouchers) == 4, f"Expected 4 correction vouchers, got {len(vouchers)}"
+
+
+def test_year_end_closing_monthly():
+    """Month-end closing: handles closingMonth as string '2026-03'"""
+    from task2.solution import execute_plan
+    mock = APIMock()
+    plan = {
+        "task_type": "year_end_closing",
+        "entities": {
+            "closingYear": 2026, "closingMonth": "2026-03",
+            "depreciationAssets": [{"originalCost": 270750, "depreciationYears": 8, "monthlyDepreciation": 2820.31, "expenseAccount": 6010}],
+            "accrualReversal": {"amount": 2450, "account": 1720},
+            "salaryProvision": {"expenseAccount": 5000, "payableAccount": 2900, "amount": 50000},
+        }
+    }
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put), \
+         patch('task2.solution.tx_delete', mock.delete):
+        execute_plan("http://test", "tok", plan, "")
+    vouchers = posts(mock, "/ledger/voucher")
+    assert len(vouchers) >= 3, f"Expected >=3 vouchers (depreciation+accrual+salary), got {len(vouchers)}"
 
 
 # ============================================================

@@ -65,9 +65,10 @@ Given a prompt in any language (Norwegian, English, Spanish, Portuguese, Nynorsk
   "task_type": "one of: create_employee, create_customer, create_supplier, create_product, create_department, create_project, create_invoice, create_travel_expense, delete_travel_expense, register_payment, register_supplier_invoice, run_payroll, create_credit_note, update_employee, update_customer, create_contact, create_order, invoice_with_payment, project_invoice, reverse_voucher, delete_entity, bank_reconciliation, register_receipt_expense, correct_ledger_errors, unknown",
   // Use 'project_invoice' when the task involves: registering hours on a project, setting fixed price on a project, or generating an invoice linked to a project. If the prompt mentions a project name AND an invoice, use project_invoice.
   // Use 'create_accounting_dimension' when creating free accounting dimensions with values and/or posting vouchers linked to dimension values
+  // Use 'ledger_analysis' when asked to analyze the ledger/general ledger (Hauptbuch/hovedbok), identify accounts with changes/increases, and create projects/activities based on the findings. Extract: period {startDate, endDate}, accountType (expense/income), numberOfAccounts, createProjects (boolean), createActivities (boolean).
   // Use 'year_end_closing' when asked to perform year-end closing, annual closing (cierre anual, Jahresabschluss, clôture annuelle), depreciation, tax provision, prepaid reversal, or close income/expense accounts. Extract ALL data from the prompt: depreciationAssets [{assetName, originalCost, assetAccount, depreciationYears, annualDepreciation, expenseAccount, accumulatedDepreciationAccount}], prepaidAmount, prepaidAccount, taxRate, taxAccount, taxPayableAccount, closingYear, resultAccount.
   // Use 'correct_ledger_errors' when asked to find and correct errors in the ledger/vouchers. Extract: errors [{errorType (wrong_account|duplicate|missing_vat|wrong_amount), wrongAccount, correctAccount, amount, correctAmount, vatAccount}]
-  // Use 'register_receipt_expense' when asked to register an expense from a receipt (kvittering/recibo/Quittung). Extract: items [{description, amount, vatRate, accountNumber}], department, supplierName, supplierOrgNumber, totalAmount, vatAmount, date. Common expense accounts: 6540 (office supplies), 7100 (travel), 7140 (transport/togbillett), 7350 (parking), 6800 (office equipment), 6300 (leasing), 4300 (goods for resale). VAT: 25% standard, 15% food, 12% transport, 0% exempt.
+  // Use 'register_receipt_expense' when asked to register an expense from a receipt (kvittering/recibo/Quittung). IMPORTANT: Only extract the SPECIFIC item(s) mentioned in the prompt, NOT all items from the receipt. If the prompt says "we need the Togbillett expense", only include the Togbillett line item. Extract: items [{description, amount, vatRate, accountNumber}], department, supplierName, supplierOrgNumber, totalAmount (of selected items only), vatAmount, date. Common expense accounts: 6540 (office supplies), 7100 (travel), 7140 (transport/togbillett), 7350 (parking), 6800 (office equipment), 6300 (leasing), 4300 (goods for resale). VAT: 25% standard, 15% food, 12% transport, 0% exempt.
   "entities": {
     // ALL relevant data extracted from the prompt
     // Names: firstName, lastName (split properly)
@@ -629,6 +630,9 @@ def handle_create_employee(base_url, token, e):
     if "firstName" in e: body["firstName"] = e["firstName"]
     if "lastName" in e: body["lastName"] = e["lastName"]
     emp_email = e.get("email") or e.get("employeeEmail")
+    if not emp_email and e.get("firstName") and e.get("lastName"):
+        # Generate default email if missing (required by Tripletex)
+        emp_email = f"{e['firstName'].lower()}.{e['lastName'].lower()}@example.org"
     if emp_email: body["email"] = emp_email
     if e.get("dateOfBirth"): body["dateOfBirth"] = e["dateOfBirth"]
     if e.get("phoneNumberMobile") or e.get("phone") or e.get("phoneNumber"):
@@ -657,9 +661,10 @@ def handle_create_employee(base_url, token, e):
         tx_put(base_url, token, "/employee/entitlement/:grantEntitlementsByTemplate",
                params={"employeeId": emp_id, "template": template})
 
-        # Set national ID number
-        if e.get("nationalIdNumber") or e.get("nationalIdentityNumber"):
-            nid = str(e.get("nationalIdNumber") or e.get("nationalIdentityNumber"))
+        # Set national ID number (LLM may use employeeNumber, nationalIdNumber, or nationalIdentityNumber)
+        nid_raw = e.get("nationalIdNumber") or e.get("nationalIdentityNumber") or e.get("employeeNumber") or e.get("personnummer")
+        if nid_raw and len(str(nid_raw).replace(" ", "").replace("-", "")) == 11:
+            nid = str(nid_raw)
             nid = nid.replace(" ", "").replace("-", "").strip()  # Clean OCR artifacts
             st_nid, resp_nid = tx_put(base_url, token, f"/employee/{emp_id}", {
                 "id": emp_id, "version": resp.get("value", {}).get("version", 0),
@@ -691,18 +696,26 @@ def handle_create_employee(base_url, token, e):
 
             # Add employment details
             if employment_id:
+                # Map employment form from prompt (e.g. "Fast stilling" → PERMANENT)
+                emp_form_map = {"fast stilling": "PERMANENT", "permanent": "PERMANENT",
+                                "midlertidig": "TEMPORARY", "temporary": "TEMPORARY", "vikariat": "TEMPORARY"}
+                emp_form_raw = (e.get("employmentType") or e.get("employmentForm") or "").lower()
+                emp_form = emp_form_map.get(emp_form_raw, "NOT_CHOSEN")
                 det_body = {
                     "employment": {"id": employment_id},
                     "date": e["startDate"],
                     "employmentType": "ORDINARY",
+                    "employmentForm": emp_form,
                     "remunerationType": "MONTHLY_WAGE",
                     "percentageOfFullTimeEquivalent": float(e.get("employmentPercentage") or 100),
                     "workingHoursScheme": "NOT_SHIFT",
                 }
+                if e.get("dailyWorkingHours"):
+                    det_body["shiftDurationHours"] = float(e["dailyWorkingHours"])
                 if e.get("baseSalary") or e.get("annualSalary"):
                     salary = float(e.get("annualSalary") or e.get("baseSalary") or 0)
                     det_body["annualSalary"] = salary
-                occ_code = e.get("occupationCode")
+                occ_code = e.get("occupationCode") or e.get("occupationalCode") or e.get("styrk")
                 if occ_code:
                     # Look up occupation code
                     _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
@@ -1218,20 +1231,51 @@ def handle_register_payment(base_url, token, e):
     pt_list = pt_resp.get("values", [])
     pt_id = pt_list[0]["id"] if pt_list else 0
 
-    # Use invoice's own amount for full payment — this is the total incl VAT
-    amount = invoice.get("amountOutstandingTotal") or invoice.get("amountCurrency", 0)
-    if not amount:
-        # Fallback: calculate from prompt amount + VAT
+    # Determine payment amount
+    # For currency invoices, use paymentAmountNOK; otherwise invoice outstanding
+    payment_amount = float(e.get("paymentAmountNOK") or 0)
+    if not payment_amount:
+        payment_amount = float(invoice.get("amountOutstandingTotal") or invoice.get("amountCurrency") or 0)
+    if not payment_amount:
         net = float(e.get("amount") or e.get("netAmount") or 0)
         vat_rate = float(e.get("vatRate") or 25)
-        amount = net * (1 + vat_rate / 100) if net else 0
+        payment_amount = net * (1 + vat_rate / 100) if net else 0
 
     st, resp = tx_put(base_url, token, f"/invoice/{inv_id}/:payment", params={
         "paymentDate": e.get("date") or e.get("paymentDate") or today,
         "paymentTypeId": pt_id,
-        "paidAmount": float(amount),
+        "paidAmount": float(payment_amount),
     })
-    print(f"invoice payment: {st} amount={amount} {str(resp)[:200]}")
+    print(f"invoice payment: {st} amount={payment_amount} {str(resp)[:200]}")
+
+    # Post currency gain/loss (agio/disagio) if applicable
+    currency_gain = float(e.get("currencyGainNOK") or e.get("currencyGain") or 0)
+    currency_loss = float(e.get("currencyLossNOK") or e.get("currencyLoss") or 0)
+    fx_amount = currency_gain or -currency_loss
+    if fx_amount:
+        # Agio (gain) → credit 8060, Disagio (loss) → debit 8160
+        if fx_amount > 0:
+            fx_acct = find_account_id(base_url, token, 8060)  # Agio (currency gain)
+        else:
+            fx_acct = find_account_id(base_url, token, 8160)  # Disagio (currency loss)
+        bank_acct = find_account_id(base_url, token, 1920)
+        if fx_acct and bank_acct:
+            st_fx, resp_fx = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                "date": e.get("date") or today,
+                "description": f"Valutadifferanse {e.get('customerName', '')}".strip(),
+                "postings": [
+                    {"row": 1, "date": e.get("date") or today,
+                     "description": "Agio" if fx_amount > 0 else "Disagio",
+                     "account": {"id": bank_acct},
+                     "amountGross": round(abs(fx_amount), 2), "amountGrossCurrency": round(abs(fx_amount), 2)},
+                    {"row": 2, "date": e.get("date") or today,
+                     "description": "Valutagevinst" if fx_amount > 0 else "Valutatap",
+                     "account": {"id": fx_acct},
+                     "amountGross": round(-abs(fx_amount), 2), "amountGrossCurrency": round(-abs(fx_amount), 2)},
+                ],
+            })
+            print(f"currency {'gain' if fx_amount > 0 else 'loss'} voucher: {st_fx} amount={abs(fx_amount)}")
+
     return st in (200, 201)
 
 
@@ -1265,10 +1309,25 @@ def handle_register_supplier_invoice(base_url, token, e):
     vat_acct_id = find_account_id(base_url, token, 2710)
 
     # Build postings for supplier invoice
-    # Pattern: expense with vatType (Tripletex auto-calculates VAT) + credit with supplier
-    NOK_VAT_IN = {"25": 1, "15": 11, "12": 12, "0": 0}
-    vat_pct = str(int(vat_rate)).replace("%", "").strip()
-    vat_type_id = NOK_VAT_IN.get(vat_pct, 1)
+    # Look up actual input VAT type IDs from the API
+    _, vat_resp = tx_get(base_url, token, "/ledger/vatType", {"count": 50, "fields": "id,name,percentage,number"})
+    vat_types = vat_resp.get("values", [])
+    # Find input VAT types (inngående)
+    vat_type_id = None
+    target_pct = int(vat_rate)
+    for vt in vat_types:
+        name = (vt.get("name") or "").lower()
+        pct = vt.get("percentage", 0)
+        if abs(pct - target_pct) < 0.5 and ("inngående" in name or "innk" in name or "input" in name or "incoming" in name):
+            vat_type_id = vt["id"]
+            print(f"  found input VAT {target_pct}%: id={vat_type_id} name='{vt.get('name')}'")
+            break
+    if not vat_type_id:
+        # Fallback to hardcoded
+        NOK_VAT_IN = {"25": 1, "15": 11, "12": 12, "0": 0}
+        vat_pct = str(target_pct)
+        vat_type_id = NOK_VAT_IN.get(vat_pct, 1)
+        print(f"  using hardcoded input VAT {vat_pct}%: id={vat_type_id}")
 
     postings = [
         {
@@ -1320,21 +1379,29 @@ def handle_register_supplier_invoice(base_url, token, e):
     if si_body.get("supplier") is None:
         si_body.pop("supplier", None)
 
+    # Try with amountCurrency first
     st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
-    print(f"supplierInvoice: {st} {str(resp)[:500]}")
+    print(f"supplierInvoice: {st} {str(resp)[:300]}")
 
-    # If 500, retry same body (likely timing issue with supplier creation)
-    if st == 500:
-        import time as _t; _t.sleep(1)
-        st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
-        print(f"supplierInvoice (retry same): {st} {str(resp)[:200]}")
-
-    # Last resort: retry without amountCurrency
+    # If 500, the proxy doesn't support amountCurrency — retry without it
     if st == 500:
         si_body.pop("amountCurrency", None)
         si_body.pop("currency", None)
         st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
-        print(f"supplierInvoice (retry no amount): {st} {str(resp)[:200]}")
+        # Log full response to check amountCurrency
+        val = resp.get("value", {})
+        print(f"supplierInvoice (no amount): {st} amount={val.get('amount')} amountCurrency={val.get('amountCurrency')} {str(resp)[:300]}")
+
+        # After creation, update voucher postings to ensure correct amounts
+        if st in (200, 201):
+            si_id = resp.get("value", {}).get("id")
+            voucher_id = resp.get("value", {}).get("voucher", {}).get("id") if isinstance(resp.get("value", {}).get("voucher"), dict) else None
+            if not voucher_id and si_id:
+                _, si_detail = tx_get(base_url, token, f"/supplierInvoice/{si_id}", {"fields": "id,voucher"})
+                voucher_id = si_detail.get("value", {}).get("voucher", {}).get("id")
+            if voucher_id:
+                st_vp, resp_vp = tx_put(base_url, token, f"/supplierInvoice/voucher/{voucher_id}/postings", postings)
+                print(f"update voucher postings: {st_vp} {str(resp_vp)[:200] if st_vp != 200 else ''}")
 
     if st in (200, 201):
         return True
@@ -1368,6 +1435,16 @@ def handle_run_payroll(base_url, token, e):
 
     base_salary = float(e.get("baseSalary") or e.get("salary") or 0)
     bonus = float(e.get("bonus") or 0)
+
+    # Ensure employee has dateOfBirth (required for employment creation)
+    _, emp_detail = tx_get(base_url, token, f"/employee/{emp_id}", {"fields": "id,version,dateOfBirth"})
+    emp_dob = emp_detail.get("value", {}).get("dateOfBirth")
+    if not emp_dob:
+        emp_ver = emp_detail.get("value", {}).get("version", 0)
+        st_dob, _ = tx_put(base_url, token, f"/employee/{emp_id}", {
+            "id": emp_id, "version": emp_ver, "dateOfBirth": "1990-01-01"
+        })
+        print(f"set employee DOB: {st_dob}")
 
     # Ensure employee has employment record (required for salary/transaction)
     st_emp, emp_resp = tx_get(base_url, token, "/employee/employment", {"employeeId": emp_id, "fields": "id", "count": 1})
@@ -1771,59 +1848,98 @@ def handle_reverse_voucher(base_url, token, e):
 
 
 def handle_bank_reconciliation(base_url, token, e):
-    """Bank reconciliation: match bank statement entries to ledger/payments."""
+    """Bank reconciliation: match bank transactions to invoices and register payments."""
     today = str(date.today())
+    transactions = e.get("bankTransactions") or []
 
-    # Step 1: Get bank accounts
-    _, ba_resp = tx_get(base_url, token, "/bank/statement", {"count": 10})
-    statements = ba_resp.get("values", [])
+    if transactions:
+        # New-style: process each transaction as a payment
+        _, pt_resp = tx_get(base_url, token, "/invoice/paymentType", {"count": 1, "fields": "id"})
+        pt_id = pt_resp.get("values", [{}])[0].get("id", 0)
 
-    # Step 2: Get the bank account from entity or use first available
-    account_number = e.get("accountNumber") or e.get("bankAccountNumber")
+        for tx in transactions:
+            tx_date = tx.get("date") or today
+            tx_amount = float(tx.get("amount") or 0)
+            tx_cust = tx.get("customerName")
+            tx_supp = tx.get("supplierName")
+            tx_inv_num = tx.get("invoiceNumber")
+            tx_desc = tx.get("description", "")
+
+            if tx_amount > 0 and tx_cust:
+                # Incoming payment — find customer invoice and register payment
+                cust_id = None
+                _, c_resp = tx_get(base_url, token, "/customer", {"fields": "id,name", "count": 50})
+                for c in c_resp.get("values", []):
+                    if tx_cust.lower() in c.get("name", "").lower():
+                        cust_id = c["id"]
+                        break
+
+                if cust_id:
+                    _, inv_resp = tx_get(base_url, token, "/invoice", {
+                        "customerId": cust_id, "invoiceDateFrom": "2020-01-01", "invoiceDateTo": "2030-12-31",
+                        "count": 10, "fields": "id,invoiceNumber,amountCurrency,amountOutstandingTotal"
+                    })
+                    invoices = inv_resp.get("values", [])
+                    # Match by invoice number if available
+                    target_inv = None
+                    if tx_inv_num:
+                        for inv in invoices:
+                            if str(inv.get("invoiceNumber", "")) == str(tx_inv_num):
+                                target_inv = inv
+                                break
+                    if not target_inv and invoices:
+                        target_inv = invoices[0]
+
+                    if target_inv:
+                        st_pay, resp_pay = tx_put(base_url, token, f"/invoice/{target_inv['id']}/:payment", params={
+                            "paymentDate": tx_date, "paymentTypeId": pt_id, "paidAmount": tx_amount,
+                        })
+                        print(f"payment {tx_cust} inv={tx_inv_num} amount={tx_amount}: {st_pay}")
+                    else:
+                        print(f"no invoice found for {tx_cust}")
+                else:
+                    print(f"customer not found: {tx_cust}")
+
+            elif tx_amount < 0 and tx_supp:
+                # Outgoing payment — register supplier payment as voucher
+                bank_id = find_account_id(base_url, token, 1920)
+                payable_id = find_account_id(base_url, token, 2400)
+                abs_amount = abs(tx_amount)
+                if bank_id and payable_id:
+                    st_v, _ = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                        "date": tx_date,
+                        "description": f"Betaling {tx_supp} {tx_desc}".strip(),
+                        "postings": [
+                            {"row": 1, "date": tx_date, "description": f"Leverandorbetaling {tx_supp}",
+                             "account": {"id": payable_id},
+                             "amountGross": round(abs_amount, 2), "amountGrossCurrency": round(abs_amount, 2)},
+                            {"row": 2, "date": tx_date, "description": f"Bank utbetaling",
+                             "account": {"id": bank_id},
+                             "amountGross": round(-abs_amount, 2), "amountGrossCurrency": round(-abs_amount, 2)},
+                        ],
+                    })
+                    print(f"supplier payment {tx_supp} amount={abs_amount}: {st_v}")
+
+        return True
+
+    # Legacy: old-style bank reconciliation
     _, acc_resp = tx_get(base_url, token, "/bankAccount", {"count": 10})
     bank_accounts = acc_resp.get("values", [])
-    bank_acct_id = None
-    if bank_accounts:
-        if account_number:
-            for ba in bank_accounts:
-                if str(ba.get("number", "")) == str(account_number):
-                    bank_acct_id = ba["id"]
-                    break
-        if not bank_acct_id:
-            bank_acct_id = bank_accounts[0]["id"]
-
-    # Step 3: Get open ledger postings (unmatch items) on account 1920
-    ledger_acct_id = None
-    _, lac = tx_get(base_url, token, "/ledger/account", {"number": 1920, "fields": "id", "count": 1})
-    if lac.get("values"):
-        ledger_acct_id = lac["values"][0]["id"]
-
-    # Step 4: Get bank reconciliation entries and match them
-    if bank_acct_id:
-        _, rec_resp = tx_get(base_url, token, "/bank/reconciliation",
-                             {"bankAccountId": bank_acct_id, "count": 5})
-        reconciliations = rec_resp.get("values", [])
-        if not reconciliations:
-            # Create a reconciliation for today
-            rec_body = {
-                "bankAccount": {"id": bank_acct_id},
-                "closingDate": e.get("date") or today,
-                "closingBalance": float(e.get("closingBalance") or e.get("balance") or 0),
-            }
-            st_rc, rc_resp = tx_post(base_url, token, "/bank/reconciliation", rec_body)
-            print(f"create reconciliation: {st_rc}")
-            rec_id = rc_resp.get("value", {}).get("id")
-        else:
-            rec_id = reconciliations[0]["id"]
-            print(f"reconciliation exists: id={rec_id}")
-
-        if rec_id:
-            # Match all unmatched entries
-            _, match_resp = tx_put(base_url, token, f"/bank/reconciliation/{rec_id}/:match", {})
-            print(f"match: {match_resp}")
-            return True
-
-    print("bank_reconciliation: no bank account found")
+    if not bank_accounts:
+        print("bank_reconciliation: no bank account found")
+        return False
+    bank_acct_id = bank_accounts[0]["id"]
+    _, rec_resp = tx_get(base_url, token, "/bank/reconciliation", {"bankAccountId": bank_acct_id, "count": 5})
+    reconciliations = rec_resp.get("values", [])
+    rec_id = reconciliations[0]["id"] if reconciliations else None
+    if not rec_id:
+        st_rc, rc_resp = tx_post(base_url, token, "/bank/reconciliation", {
+            "bankAccount": {"id": bank_acct_id}, "closingDate": today, "closingBalance": 0})
+        rec_id = rc_resp.get("value", {}).get("id")
+    if rec_id:
+        _, match_resp = tx_put(base_url, token, f"/bank/reconciliation/{rec_id}/:match", {})
+        print(f"match: {match_resp}")
+        return True
     return False
 
 
@@ -2123,11 +2239,126 @@ def handle_delete_entity(base_url, token, e):
     return st in (200, 204)
 
 
-def handle_year_end_closing(base_url, token, e):
-    """Year-end closing: depreciation, prepaid reversal, tax provision, close to equity."""
+def handle_ledger_analysis(base_url, token, e):
+    """Analyze ledger accounts, find top changes, create projects/activities."""
     today = str(date.today())
-    closing_year = e.get("closingYear") or "2025"
-    closing_date = f"{closing_year}-12-31"
+    period = e.get("period") or {}
+    start_date = period.get("startDate") or "2026-01-01"
+    end_date = period.get("endDate") or "2026-02-28"
+    num_accounts = int(e.get("numberOfAccounts") or 3)
+
+    # Parse months from period
+    import re as _re
+    start_parts = start_date.split("-")
+    end_parts = end_date.split("-")
+    year = int(start_parts[0])
+    month1 = int(start_parts[1])
+    month2 = int(end_parts[1])
+
+    # Get account names for lookup
+    _, acc_resp = tx_get(base_url, token, "/ledger/account", {
+        "count": 200, "fields": "id,number,name",
+        "numberFrom": 4000, "numberTo": 8999,
+    })
+    acct_map = {str(a.get("number","")): {"id": a["id"], "name": a.get("name","")} for a in acc_resp.get("values", [])}
+    print(f"found {len(acct_map)} expense accounts")
+
+    # Fetch ALL postings in bulk (2 calls total, not per-account)
+    import calendar
+
+    def get_period_totals(yr, mo):
+        last_day = calendar.monthrange(yr, mo)[1]
+        _, resp = tx_get(base_url, token, "/ledger/posting", {
+            "dateFrom": f"{yr}-{mo:02d}-01", "dateTo": f"{yr}-{mo:02d}-{last_day}",
+            "accountNumberFrom": 4000, "accountNumberTo": 8999,
+            "count": 1000, "fields": "id,account,amountGross,date",
+        })
+        totals = {}
+        for p in resp.get("values", []):
+            acct = p.get("account", {})
+            num = str(acct.get("number", ""))
+            if num:
+                if num not in totals:
+                    totals[num] = {"id": acct.get("id"), "total": 0}
+                totals[num]["total"] += abs(float(p.get("amountGross") or 0))
+        return totals
+
+    m1 = get_period_totals(year, month1)
+    m2 = get_period_totals(year, month2)
+    print(f"month {month1}: {len(m1)} accounts, month {month2}: {len(m2)} accounts")
+
+    # Calculate increases
+    increases = []
+    for acct_num in set(list(m1.keys()) + list(m2.keys())):
+        t1 = m1.get(acct_num, {}).get("total", 0)
+        t2 = m2.get(acct_num, {}).get("total", 0)
+        inc = t2 - t1
+        if inc > 0:
+            acct_info = acct_map.get(acct_num, {})
+            increases.append({
+                "number": acct_num, "id": acct_info.get("id") or m2.get(acct_num, m1.get(acct_num, {})).get("id"),
+                "name": acct_info.get("name", f"Konto {acct_num}"),
+                "increase": inc,
+            })
+
+    increases.sort(key=lambda x: x["increase"], reverse=True)
+    top = increases[:num_accounts]
+    print(f"top {num_accounts} increases: {[(a['number'], a['name'], round(a['increase'],2)) for a in top]}")
+
+    # Create projects and activities for each
+    dept_id = get_or_create_department(base_url, token)
+    for acct in top:
+        # Create project
+        proj_name = acct["name"]
+        # Get a PM (any employee)
+        _, emp_resp = tx_get(base_url, token, "/employee", {"count": 1, "fields": "id"})
+        emp_vals = emp_resp.get("values", [])
+        pm_id = emp_vals[0]["id"] if emp_vals else None
+
+        proj_body = {
+            "name": proj_name,
+            "startDate": today,
+            "isInternal": True,
+        }
+        if pm_id:
+            proj_body["projectManager"] = {"id": pm_id}
+        st_p, resp_p = tx_post(base_url, token, "/project", proj_body)
+        proj_id = resp_p.get("value", {}).get("id")
+        print(f"create project '{proj_name}': {st_p} id={proj_id}")
+
+        # Create activity for this project
+        if proj_id:
+            act_body = {"name": proj_name, "activityType": "PROJECT_SPECIFIC_ACTIVITY"}
+            st_a, resp_a = tx_post(base_url, token, "/activity", act_body)
+            act_id = resp_a.get("value", {}).get("id")
+            print(f"create activity '{proj_name}': {st_a} id={act_id}")
+
+    return True
+
+
+def handle_year_end_closing(base_url, token, e):
+    """Year/month-end closing: depreciation, accrual reversal, salary accrual, tax provision."""
+    today = str(date.today())
+    closing_year = str(e.get("closingYear") or "2025")
+    closing_month_raw = e.get("closingMonth")
+    closing_month = None
+    if closing_month_raw:
+        # Handle "2026-03" or "3" or 3
+        cm_str = str(closing_month_raw)
+        if "-" in cm_str:
+            parts = cm_str.split("-")
+            closing_year = parts[0]
+            closing_month = int(parts[1])
+        else:
+            closing_month = int(cm_str)
+    if closing_month:
+        # Month-end closing
+        import calendar
+        last_day = calendar.monthrange(int(closing_year), closing_month)[1]
+        closing_date = f"{closing_year}-{closing_month:02d}-{last_day:02d}"
+    else:
+        closing_date = f"{closing_year}-12-31"
+    is_monthly = closing_month is not None
 
     # 1. Depreciation vouchers
     assets = e.get("depreciationAssets") or []
@@ -2135,13 +2366,36 @@ def handle_year_end_closing(base_url, token, e):
         postings = []
         row = 1
         for asset in assets:
-            dep_amount = float(asset.get("annualDepreciation") or 0)
+            # Use monthly depreciation if available (month-end), else annual
+            dep_amount = float(asset.get("monthlyDepreciation") or 0) if is_monthly else float(asset.get("annualDepreciation") or 0)
             if not dep_amount:
                 cost = float(asset.get("originalCost") or 0)
                 years = int(asset.get("depreciationYears") or 1)
-                dep_amount = round(cost / years, 2)
-            expense_acct = find_account_id(base_url, token, int(asset.get("expenseAccount") or 6010))
-            accum_acct = find_account_id(base_url, token, int(asset.get("accumulatedDepreciationAccount") or 1209))
+                annual = cost / years
+                dep_amount = round(annual / 12, 2) if is_monthly else round(annual, 2)
+            exp_num = int(asset.get("expenseAccount") or 6010)
+            acc_num = int(asset.get("accumulatedDepreciationAccount") or 1209)
+            asset_acct_num = int(asset.get("assetAccount") or 0)
+            expense_acct = find_account_id(base_url, token, exp_num)
+            # Try multiple candidates for accumulated depreciation
+            accum_acct = None
+            for candidate in [acc_num, 1209, 1219, 1229, 1129, 1119, 1249, 1289]:
+                accum_acct = find_account_id(base_url, token, candidate)
+                if accum_acct:
+                    print(f"  accum depreciation: found account {candidate}")
+                    break
+            if not accum_acct and asset_acct_num:
+                # Fallback: credit the asset account directly (direct write-off)
+                accum_acct = find_account_id(base_url, token, asset_acct_num)
+                if accum_acct:
+                    print(f"  accum depreciation: using asset account {asset_acct_num} as fallback")
+            if not accum_acct:
+                # Last resort: create the account
+                st_ca, resp_ca = tx_post(base_url, token, "/ledger/account", {
+                    "number": acc_num, "name": "Akkumulerte avskrivninger"})
+                accum_acct = resp_ca.get("value", {}).get("id")
+                print(f"  created accum account {acc_num}: {st_ca} id={accum_acct}")
+            print(f"  asset '{asset.get('assetName','')}': expense {exp_num}={expense_acct}, accum={accum_acct}, dep={dep_amount}")
             if expense_acct and accum_acct:
                 postings.append({
                     "row": row, "date": closing_date,
@@ -2195,6 +2449,90 @@ def handle_year_end_closing(base_url, token, e):
                 ],
             })
             print(f"prepaid reversal voucher: {st} {str(resp)[:200]}")
+
+    # 2b. Accrual reversal (from entities.accrualReversal)
+    accrual = e.get("accrualReversal")
+    if accrual:
+        acr_amount = float(accrual.get("amount") or 0)
+        acr_acct_num = int(accrual.get("account") or 1720)
+        acr_expense_num = int(accrual.get("expenseAccount") or 6540)
+        if acr_amount:
+            acr_acct = find_account_id(base_url, token, acr_acct_num)
+            acr_expense = find_account_id(base_url, token, acr_expense_num)
+            if acr_acct and acr_expense:
+                st_ar, resp_ar = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                    "date": closing_date,
+                    "description": f"Periodisering reversering konto {acr_acct_num}",
+                    "postings": [
+                        {"row": 1, "date": closing_date, "description": "Periodisert kostnad",
+                         "account": {"id": acr_expense},
+                         "amountGross": round(acr_amount, 2), "amountGrossCurrency": round(acr_amount, 2)},
+                        {"row": 2, "date": closing_date, "description": "Reduksjon forskuddsbetalt",
+                         "account": {"id": acr_acct},
+                         "amountGross": round(-acr_amount, 2), "amountGrossCurrency": round(-acr_amount, 2)},
+                    ],
+                })
+                print(f"accrual reversal voucher: {st_ar} {str(resp_ar)[:200]}")
+
+    # 2c. Salary accrual
+    salary_accrual = e.get("salaryAccrual") or e.get("salaryProvision")
+    if salary_accrual:
+        sal_amount = float(salary_accrual.get("amount") or e.get("salaryAccrualAmount") or 0)
+        sal_expense_num = int(salary_accrual.get("expenseAccount") or 5000)
+        sal_accrual_num = int(salary_accrual.get("accrualAccount") or salary_accrual.get("payableAccount") or 2900)
+        if sal_amount:
+            sal_expense = find_account_id(base_url, token, sal_expense_num)
+            sal_accrual_acct = find_account_id(base_url, token, sal_accrual_num)
+            if sal_expense and sal_accrual_acct:
+                st_sa, resp_sa = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                    "date": closing_date,
+                    "description": "Lønnsavsetning",
+                    "postings": [
+                        {"row": 1, "date": closing_date, "description": "Lønnskostnad",
+                         "account": {"id": sal_expense},
+                         "amountGross": round(sal_amount, 2), "amountGrossCurrency": round(sal_amount, 2)},
+                        {"row": 2, "date": closing_date, "description": "Påløpt lønn",
+                         "account": {"id": sal_accrual_acct},
+                         "amountGross": round(-sal_amount, 2), "amountGrossCurrency": round(-sal_amount, 2)},
+                    ],
+                })
+                print(f"salary accrual voucher: {st_sa} amount={sal_amount} {str(resp_sa)[:200]}")
+        else:
+            # Try to estimate salary amount from ledger
+            try:
+                _, sal_tx = tx_get(base_url, token, "/salary/transaction",
+                    {"count": 10, "fields": "id,amount"})
+                txs = sal_tx.get("values", [])
+                if txs:
+                    sal_amount = sum(abs(float(t.get("amount") or 0)) for t in txs)
+                if not sal_amount:
+                    _, emp_det = tx_get(base_url, token, "/employee/employment/details",
+                        {"count": 50, "fields": "id,annualSalary"})
+                    details = emp_det.get("values", [])
+                    sal_amount = sum(float(d.get("annualSalary") or 0) / 12 for d in details)
+                if sal_amount:
+                    sal_expense = find_account_id(base_url, token, sal_expense_num)
+                    sal_accrual_acct = find_account_id(base_url, token, sal_accrual_num)
+                    if sal_expense and sal_accrual_acct:
+                        st_sa, resp_sa = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                            "date": closing_date,
+                            "description": "Lønnsavsetning",
+                            "postings": [
+                                {"row": 1, "date": closing_date, "description": "Lønnskostnad",
+                                 "account": {"id": sal_expense},
+                                 "amountGross": round(sal_amount, 2), "amountGrossCurrency": round(sal_amount, 2)},
+                                {"row": 2, "date": closing_date, "description": "Påløpt lønn",
+                                 "account": {"id": sal_accrual_acct},
+                                 "amountGross": round(-sal_amount, 2), "amountGrossCurrency": round(-sal_amount, 2)},
+                            ],
+                        })
+                        print(f"salary accrual voucher (estimated): {st_sa} amount={sal_amount}")
+                    else:
+                        print("salary accrual: could not find accounts — skipping")
+                else:
+                    print("salary accrual: no amount found in ledger — skipping")
+            except Exception as e_sa:
+                print(f"salary accrual lookup error: {e_sa}")
 
     # 3. Tax provision
     tax_rate = float(e.get("taxRate") or 22) / 100
@@ -2275,7 +2613,7 @@ def handle_correct_ledger_errors(base_url, token, e):
 
         elif "duplic" in err_type:
             # Duplicate voucher: find and reverse it
-            acct_num = int(err.get("account", 0))
+            acct_num = int(err.get("account") or err.get("wrongAccount") or 0)
             acct_id = find_account_id(base_url, token, acct_num)
             bank_id = find_account_id(base_url, token, 1920)
             if acct_id:
@@ -2288,7 +2626,7 @@ def handle_correct_ledger_errors(base_url, token, e):
 
         elif "vat" in err_type.lower() or "mva" in err_type.lower():
             # Missing VAT line: add the missing VAT posting
-            acct_num = int(err.get("account", 0))
+            acct_num = int(err.get("account") or err.get("wrongAccount") or 0)
             vat_acct_num = int(err.get("vatAccount", 2710))
             amt_excl = float(err.get("amountExcludingVat") or err.get("amount") or 0)
             vat_rate = float(err.get("vatRate") or 25)
@@ -2306,7 +2644,7 @@ def handle_correct_ledger_errors(base_url, token, e):
 
         elif "amount" in err_type.lower() or "beløp" in err_type.lower():
             # Wrong amount: reverse difference
-            acct_num = int(err.get("account", 0))
+            acct_num = int(err.get("account") or err.get("wrongAccount") or 0)
             wrong_amt = float(err.get("amount") or 0)
             correct_amt = float(err.get("correctAmount") or 0)
             diff = wrong_amt - correct_amt
@@ -2448,6 +2786,9 @@ HANDLERS = {
     "ledger_correction": handle_correct_ledger_errors,
     "year_end_closing": handle_year_end_closing,
     "annual_closing": handle_year_end_closing,
+    "month_end_closing": handle_year_end_closing,
+    "ledger_analysis": handle_ledger_analysis,
+    "analyze_ledger": handle_ledger_analysis,
     "receipt_expense": handle_register_receipt_expense,
     "register_receipt": handle_register_receipt_expense,
     # Aliases for LLM variations
@@ -2648,9 +2989,11 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
+BUILD_VERSION = "v20260321-1420"
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": BUILD_VERSION}
 
 
 if __name__ == "__main__":
