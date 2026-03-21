@@ -206,6 +206,10 @@ def regex_parse(prompt):
             name_match = re.search(r'(?:navn|name|nombre|nom)\s+["\']?(\w[\w\s]*)', p)
             return {"task_type": "create_department", "entities": {"name": name_match.group(1).strip() if name_match else "Department"}}
 
+    # === REMINDER FEE (check before payment/invoice — mentions "invoice" + "reminder"/"purre") ===
+    if re.search(r'purregebyr|purring|rappel|mahngebühr|reminder.*fee|frais de rappel|forfalt|forfallen|overdue|retard|en retard|vencida', pl):
+        return None  # Complex task — delegate to LLM for proper extraction
+
     # === PAYMENT (check before invoice — payment prompts also mention "invoice"/"faktura") ===
     if re.search(r'betaling|payment|zahlung|pago|paiement|pagamento', pl):
         if not re.search(r'opprett|create|erstell|crea|créez', pl):  # Not "create invoice with payment"
@@ -3235,7 +3239,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2055"
+BUILD_VERSION = "v20260321-2100"
 
 @app.get("/health")
 def health():
