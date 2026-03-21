@@ -3014,20 +3014,25 @@ def normalize_entities(entities):
         "dateOfBirth": ["birthDate", "fodselsdato", "geburtsdatum", "fechaNacimiento", "dateNaissance"],
         "nationalIdNumber": ["nationalIdentityNumber", "personalNumber", "personnelNumber",
                              "personnummer", "fødselsnummer", "personalIdNumber", "idNumber"],
-        "bankAccountNumber": ["bankAccount", "kontonummer", "accountNumber_bank"],
+        "bankAccountNumber": ["bankAccount", "bankkonto", "kontonummer", "accountNumber_bank", "supplierBankAccount"],
         # Employment
         "occupationCode": ["occupationalCode", "positionCode", "styrk", "stillingskode", "jobCode"],
-        "dailyWorkingHours": ["workingHoursPerDay", "hoursPerDay", "arbeidstimer"],
+        "dailyWorkingHours": ["workingHoursPerDay", "hoursPerDay", "arbeidstimer", "dailyWorkHours", "workHoursPerDay"],
         "employmentPercentage": ["percentageOfFullTimeEquivalent", "stillingsprosent"],
+        "annualSalary": ["arslonn"],
+        "startDate": ["tiltredelse"],
+        "department": ["avdeling"],
         # Currency
         "currencyGainNOK": ["currencyGain", "exchangeRateGain", "exchangeRateGainNOK", "exchangeGainAmount", "agioAmount", "agio", "kursgewinn", "forexGain"],
         "currencyLossNOK": ["currencyLoss", "exchangeRateLoss", "exchangeRateLossNOK", "exchangeLossAmount", "disagioAmount", "disagio", "kursverlust", "forexLoss"],
         "paymentAmountNOK": ["paymentAmount", "paidAmountNOK", "paymentAmountNok", "paymentAmountInNOK", "invoiceAmountNok", "invoiceAmountInNOK"],
-        "exchangeDifferenceAccount": ["fxAccount", "currencyAccount", "gainLossAccount", "differenceAccount", "exchangeLossAccount", "exchangeGainAccount", "agioAccount", "disagioAccount"],
+        "exchangeDifferenceAccount": ["fxAccount", "currencyAccount", "gainLossAccount", "differenceAccount", "exchangeLossAccount", "exchangeGainAccount", "agioAccount", "disagioAccount", "currencyLossAccount"],
         # Hours / timesheet
         "hoursLogged": ["hourEntries", "timeEntries", "timeLogs", "hoursRecorded", "hoursRegistration", "timesheet", "employeeHours", "workedHours"],
         # Transactions
         "bankTransactions": ["transactions", "entries", "bankEntries"],
+        # Supplier cost
+        "supplierCost": ["supplierExpense", "supplierCosts"],
         # General
         "email": ["employeeEmail", "supplierEmail", "customerEmail"],
         "name": ["productName", "supplierName", "customerName", "projectName"],
@@ -3035,8 +3040,8 @@ def normalize_entities(entities):
         "hours": ["hoursWorked", "count"],
         "priceExcludingVat": ["netPrice", "unitPrice", "priceExcVat", "price"],
         # Closing
-        "salaryAccrual": ["salaryProvision"],
-        "accrualReversal": ["prepaidReversal"],
+        "salaryAccrual": ["salaryProvision", "wageAccrual", "payrollAccrual"],
+        "accrualReversal": ["prepaidReversal", "prepaidExpensesReversal"],
     }
 
     # Apply aliases: if canonical key is missing, check all aliases
@@ -3082,8 +3087,8 @@ def normalize_entities(entities):
 
     # Merge customerPayments + supplierPayments into bankTransactions
     if "bankTransactions" not in e or not e["bankTransactions"]:
-        cust_payments = e.get("customerPayments") or e.get("incomingPayments") or e.get("receivedPayments") or []
-        supp_payments = e.get("supplierPayments") or e.get("outgoingPayments") or e.get("sentPayments") or []
+        cust_payments = e.get("customerPayments") or e.get("incomingPayments") or e.get("inboundPayments") or e.get("receivedPayments") or []
+        supp_payments = e.get("supplierPayments") or e.get("outgoingPayments") or e.get("outboundPayments") or e.get("sentPayments") or []
         if cust_payments or supp_payments:
             merged = []
             for cp in cust_payments:
@@ -3273,7 +3278,7 @@ async def solve(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260321-2150"
+BUILD_VERSION = "v20260321-2155"
 
 @app.get("/health")
 def health():
