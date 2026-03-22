@@ -33,6 +33,23 @@ CACHE_DIR.mkdir(exist_ok=True)
 LOG_DIR = Path(os.environ.get("LOG_DIR", "/tmp/tripletex-requests"))
 LOG_DIR.mkdir(exist_ok=True)
 
+# Check Claude CLI auth at startup
+def check_claude_auth():
+    try:
+        r = subprocess.run([CLAUDE_PATH, "auth", "status"],
+                          capture_output=True, text=True, timeout=10)
+        logged_in = '"loggedIn": true' in r.stdout
+        if not logged_in:
+            print("WARNING: Claude CLI not logged in — LLM fallback will fail!")
+        else:
+            print("Claude CLI auth: OK")
+        return logged_in
+    except Exception as e:
+        print(f"WARNING: Claude CLI auth check failed: {e}")
+        return False
+
+CLAUDE_AUTH_OK = check_claude_auth()
+
 # ============================================================
 # Tripletex API helpers
 # ============================================================
@@ -3540,11 +3557,11 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0830"
+BUILD_VERSION = "v20260322-0835"
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": BUILD_VERSION}
+    return {"status": "ok", "version": BUILD_VERSION, "claude_auth": CLAUDE_AUTH_OK}
 
 
 if __name__ == "__main__":
