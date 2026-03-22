@@ -749,10 +749,19 @@ def handle_create_employee(base_url, token, e):
 
         # Add employment if startDate
         if e.get("startDate"):
+            # Look up division (required for salary transactions)
+            _, div_resp = tx_get(base_url, token, "/division", {"count": 1})
+            div_vals = div_resp.get("values", [])
+            division_id = div_vals[0]["id"] if div_vals else None
+
             emp_body = {
                 "employee": {"id": emp_id},
                 "startDate": e["startDate"],
+                "isMainEmployer": True,
+                "taxDeductionCode": "loennFraHovedarbeidsgiver",
             }
+            if division_id:
+                emp_body["division"] = {"id": division_id}
             st_emp, resp_emp = tx_post(base_url, token, "/employee/employment", emp_body)
             employment_id = resp_emp.get("value", {}).get("id")
             print(f"create employment: {st_emp} id={employment_id} {str(resp_emp)[:200] if st_emp != 201 else ''}")
@@ -1586,10 +1595,19 @@ def handle_run_payroll(base_url, token, e):
     st_emp, emp_resp = tx_get(base_url, token, "/employee/employment", {"employeeId": emp_id, "fields": "id", "count": 1})
     existing_employment = emp_resp.get("values", [])
     if not existing_employment:
+        # Look up division (required for salary transactions)
+        _, div_resp = tx_get(base_url, token, "/division", {"count": 1})
+        div_vals = div_resp.get("values", [])
+        division_id = div_vals[0]["id"] if div_vals else None
+
         emp_body = {
             "employee": {"id": emp_id},
             "startDate": "2024-01-01",
+            "isMainEmployer": True,
+            "taxDeductionCode": "loennFraHovedarbeidsgiver",
         }
+        if division_id:
+            emp_body["division"] = {"id": division_id}
         st_e, resp_e = tx_post(base_url, token, "/employee/employment", emp_body)
         employment_id = resp_e.get("value", {}).get("id")
         print(f"create employment: {st_e} id={employment_id} {str(resp_e)[:500] if st_e != 201 else ''}")
@@ -3386,7 +3404,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0150"
+BUILD_VERSION = "v20260322-0200"
 
 @app.get("/health")
 def health():
