@@ -61,14 +61,23 @@ def _safe_json(r):
         return {}
 
 def tx_get(base_url, token, path, params=None):
+    if _request_start and not has_time(3):
+        print(f"  SKIP GET {path} — only {time_remaining():.0f}s left")
+        return 408, {}
     r = requests.get(f"{base_url}{path}", auth=("0", token), params=params or {}, timeout=15)
     return r.status_code, _safe_json(r)
 
 def tx_post(base_url, token, path, body):
+    if _request_start and not has_time(3):
+        print(f"  SKIP POST {path} — only {time_remaining():.0f}s left")
+        return 408, {}
     r = requests.post(f"{base_url}{path}", auth=("0", token), json=body, timeout=15)
     return r.status_code, _safe_json(r)
 
 def tx_put(base_url, token, path, body=None, params=None):
+    if _request_start and not has_time(3):
+        print(f"  SKIP PUT {path} — only {time_remaining():.0f}s left")
+        return 408, {}
     r = requests.put(f"{base_url}{path}", auth=("0", token), json=body or {}, params=params or {}, timeout=15)
     return r.status_code, _safe_json(r)
 
@@ -3551,8 +3560,22 @@ async def solve(request: Request):
         traceback.print_exc()
         return JSONResponse({"status": "completed"})
 
+_request_start = 0.0
+REQUEST_TTL = 90  # seconds — competition token TTL estimate
+
+def time_remaining():
+    """Seconds remaining before token likely expires."""
+    import time as _t
+    return max(0, REQUEST_TTL - (_t.time() - _request_start))
+
+def has_time(min_seconds=5):
+    """Check if we have at least min_seconds left."""
+    return time_remaining() > min_seconds
+
 async def _solve_inner(request: Request):
-    global _bank_ensured
+    global _bank_ensured, _request_start
+    import time as _t
+    _request_start = _t.time()
     _account_cache.clear()  # Fresh cache per request
     _bank_ensured = False
     body = await request.json()
@@ -3603,14 +3626,50 @@ async def _solve_inner(request: Request):
                 print(f"COMPLEX prompt ({len(prompt)} chars, {len(action_verbs)} actions) — forcing LLM")
                 plan = None
     if plan:
-        print(f"REGEX PARSE: {plan.get('task_type', '?')}")
+        print(f"REGEX PARSE: {plan.get('task_type', '?')} | {time_remaining():.0f}s remaining")
     else:
+        # Pre-fetch common data while LLM is running (saves 3-5s)
+        import concurrent.futures
+        prefetch_data = {}
+        def _prefetch():
+            try:
+                # Pre-warm the account cache with commonly needed accounts
+                for acct_num in [1920, 2400, 2710, 6540, 5000, 2900]:
+                    find_account_id(base_url, token, acct_num)
+                # Pre-fetch bank account
+                ensure_bank_account(base_url, token)
+                # Pre-fetch departments
+                _, d = tx_get(base_url, token, "/department", {"count": 10, "fields": "id,name"})
+                prefetch_data["departments"] = d.get("values", [])
+                # Pre-fetch activities
+                _, a = tx_get(base_url, token, "/activity", {"count": 10, "fields": "id,name"})
+                prefetch_data["activities"] = a.get("values", [])
+                # Pre-fetch payment type
+                _, pt = tx_get(base_url, token, "/invoice/paymentType", {"count": 5, "fields": "id"})
+                prefetch_data["paymentTypes"] = pt.get("values", [])
+                print(f"  prefetch done: {len(_account_cache)} accounts cached | {time_remaining():.0f}s remaining")
+            except Exception as e:
+                print(f"  prefetch error: {e}")
+
+        if base_url and token:
+            prefetch_thread = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            prefetch_future = prefetch_thread.submit(_prefetch)
+        else:
+            prefetch_future = None
+
         plan = parse_with_claude(prompt, file_texts, raw_files=files)
+
+        # Wait for prefetch to complete (should be done by now since LLM took ~4s)
+        if prefetch_future:
+            try:
+                prefetch_future.result(timeout=2)  # Max 2s extra wait
+            except Exception:
+                pass
     if not plan:
         print("LLM parsing failed, no plan generated")
         return JSONResponse({"status": "completed"})
 
-    print(f"Plan: {json.dumps(plan, ensure_ascii=False, indent=2)[:600]}")
+    print(f"Plan: {plan.get('task_type', '?') if isinstance(plan, dict) else 'list'} | {time_remaining():.0f}s remaining")
 
     if base_url and token:
         plans = plan if isinstance(plan, list) else [plan]
@@ -3624,7 +3683,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-1010"
+BUILD_VERSION = "v20260322-1045"
 
 @app.get("/health")
 def health():
