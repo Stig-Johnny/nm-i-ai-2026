@@ -1514,6 +1514,36 @@ def test_M08_german_festpreis_not_payment():
     assert plan is None, f"German Festpreis should go to LLM, got {plan['task_type'] if plan else None}"
 
 
+def test_M09_unknown_account_values_no_crash():
+    """Year-end/month-end: LLM returns 'unknown' for account numbers — must not crash."""
+    from task2.solution import handle_year_end_closing, normalize_entities
+    mock = APIMock()
+    entities = normalize_entities({
+        "closingYear": 2026, "closingMonth": 3,
+        "depreciationAssets": [{
+            "assetName": "Fixed asset", "originalCost": 292100,
+            "assetAccount": "unknown", "depreciationYears": 6,
+            "expenseAccount": "6030", "accumulatedDepreciationAccount": "unknown",
+        }],
+        "prepaidAmount": 14600, "prepaidAccount": "1720",
+    })
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        # Should NOT crash with ValueError
+        handle_year_end_closing("https://mock/v2", "tok", entities)
+    # Verify voucher was still created
+    vouchers = posts(mock, "/ledger/voucher")
+    assert len(vouchers) >= 1, "Should still create depreciation voucher with default accounts"
+
+
+def test_M10_spanish_hito_not_payment():
+    """Spanish 'hito' (milestone) must NOT be register_payment."""
+    plan = regex_parse('Establezca un precio fijo de 300000 NOK. Facture al cliente 50% como pago por hito.')
+    if plan:
+        assert plan["task_type"] != "register_payment", f"hito misclass as {plan['task_type']}"
+
+
 # ============================================================
 # Run
 # ============================================================

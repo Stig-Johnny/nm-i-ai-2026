@@ -1423,7 +1423,10 @@ def handle_register_supplier_invoice(base_url, token, e):
     vat_amount = float(e.get("vatAmount") or (total_incl - net_amount))
 
     # Find the expense account (from prompt, default 6540)
-    acct_number = int(e.get("accountNumber") or e.get("account") or 6540)
+    try:
+        acct_number = int(e.get("accountNumber") or e.get("account") or 6540)
+    except (ValueError, TypeError):
+        acct_number = 6540
     expense_acct_id = find_account_id(base_url, token, acct_number)
     if not expense_acct_id:
         expense_acct_id = find_account_id(base_url, token, 6540)
@@ -2398,7 +2401,10 @@ def handle_create_accounting_dimension(base_url, token, e):
 
     # Step 3: Post voucher linked to a dimension value (if requested)
     voucher_data = e.get("voucher", {})
-    acct_number = int(e.get("accountNumber") or voucher_data.get("accountNumber") or voucher_data.get("account") or e.get("account") or 0)
+    try:
+        acct_number = int(e.get("accountNumber") or voucher_data.get("accountNumber") or voucher_data.get("account") or e.get("account") or 0)
+    except (ValueError, TypeError):
+        acct_number = 0
     amount = float(e.get("amount") or voucher_data.get("amount") or 0)
     linked_value = e.get("linkedDimensionValue") or voucher_data.get("linkedDimensionValue") or voucher_data.get("dimensionValue")
 
@@ -2697,9 +2703,12 @@ def handle_year_end_closing(base_url, token, e):
                 years = int(asset.get("depreciationYears") or 1)
                 annual = cost / years
                 dep_amount = round(annual / 12, 2) if is_monthly else round(annual, 2)
-            exp_num = int(asset.get("expenseAccount") or 6010)
-            acc_num = int(asset.get("accumulatedDepreciationAccount") or 1209)
-            asset_acct_num = int(asset.get("assetAccount") or 0)
+            def _safe_int(v, default):
+                try: return int(v)
+                except (ValueError, TypeError): return default
+            exp_num = _safe_int(asset.get("expenseAccount"), 6010)
+            acc_num = _safe_int(asset.get("accumulatedDepreciationAccount"), 1209)
+            asset_acct_num = _safe_int(asset.get("assetAccount"), 0)
             expense_acct = find_account_id(base_url, token, exp_num)
             # Try specified account first, then create it if not found
             accum_acct = find_account_id(base_url, token, acc_num)
@@ -3438,7 +3447,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0215"
+BUILD_VERSION = "v20260322-0800"
 
 @app.get("/health")
 def health():
