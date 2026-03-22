@@ -1499,14 +1499,15 @@ def handle_register_supplier_invoice(base_url, token, e):
     dept_ref = {"id": dept_id} if dept_id else None
 
     # 2-posting format for supplierInvoice (with vatType — Tripletex handles VAT)
+    # amount/amountCurrency = net, amountGross/amountGrossCurrency = gross (incl VAT)
     si_postings = [
         {
             "row": 1,
             "date": inv_date_str,
             "description": e.get("description") or "Leverandorfaktura",
             "account": {"id": expense_acct_id},
-            "amount": round(net_amount, 2), "amountCurrency": round(net_amount, 2), "amountGross": round(net_amount, 2),
-            "amountGrossCurrency": round(net_amount, 2),
+            "amount": round(net_amount, 2), "amountCurrency": round(net_amount, 2),
+            "amountGross": round(total_incl, 2), "amountGrossCurrency": round(total_incl, 2),
             "vatType": {"id": vat_type_id},
             **({"department": dept_ref} if dept_ref else {}),
         },
@@ -3598,7 +3599,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0910"
+BUILD_VERSION = "v20260322-0915"
 
 @app.get("/health")
 def health():
