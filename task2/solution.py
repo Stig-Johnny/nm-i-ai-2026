@@ -1381,8 +1381,8 @@ def handle_register_payment(base_url, token, e):
         "paidAmount": float(payment_amount),
     }
     # For currency invoices, provide the foreign currency amount
-    inv_amount_eur = float(e.get("invoiceAmount") or e.get("invoiceAmountCurrency") or e.get("invoiceAmountEUR") or 0)
-    payment_nok = float(e.get("paymentAmountNOK") or e.get("paymentAmountNok") or e.get("paidAmountNOK") or 0)
+    inv_amount_eur = float(e.get("invoiceAmount") or e.get("invoiceAmountCurrency") or e.get("invoiceAmountEUR") or e.get("invoiceAmountEur") or e.get("invoiceAmountForeign") or e.get("foreignAmount") or 0)
+    payment_nok = float(e.get("paymentAmountNOK") or e.get("paymentAmountNok") or e.get("paidAmountNOK") or e.get("paidAmountNok") or 0)
     if inv_amount_eur and payment_nok:
         pay_params["paidAmount"] = payment_nok
         pay_params["paidAmountCurrency"] = inv_amount_eur
@@ -3557,7 +3557,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0835"
+BUILD_VERSION = "v20260322-0840"
 
 @app.get("/health")
 def health():
