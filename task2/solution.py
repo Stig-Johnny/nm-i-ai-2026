@@ -1558,7 +1558,7 @@ def handle_register_supplier_invoice(base_url, token, e):
             p.pop("supplier", None)
 
     inv_date = e.get("invoiceDate") or today
-    inv_due = e.get("invoiceDueDate") or str(date.today() + timedelta(days=30))
+    inv_due = e.get("invoiceDueDate") or e.get("dueDate") or str(date.today() + timedelta(days=30))
 
     # Try 1: SI with inline voucher (NO amountCurrency — causes 500 in proxy)
     si_body = {
@@ -3599,7 +3599,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0915"
+BUILD_VERSION = "v20260322-0920"
 
 @app.get("/health")
 def health():

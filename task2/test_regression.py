@@ -1558,6 +1558,26 @@ def test_M12_bokmal_month_end_not_payroll():
     assert plan is None, f"Bokmål month-end should go to LLM, got {plan['task_type'] if isinstance(plan, dict) else plan}"
 
 
+def test_M13_supplier_invoice_uses_dueDate():
+    """SI handler must use dueDate when invoiceDueDate is missing."""
+    from task2.solution import handle_register_supplier_invoice, normalize_entities
+    mock = APIMock()
+    entities = normalize_entities({
+        "supplierName": "Test AS", "organizationNumber": "123456789",
+        "invoiceNumber": "INV-001", "invoiceDate": "2026-01-23",
+        "dueDate": "2026-02-22",
+        "totalAmountInclVat": 87125, "netAmount": 69700, "vatAmount": 17425,
+        "vatRate": 25, "accountNumber": 6300,
+    })
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        handle_register_supplier_invoice("https://mock/v2", "tok", entities)
+    si = posts(mock, "/supplierInvoice")
+    assert len(si) >= 1
+    assert si[0][2].get("invoiceDueDate") == "2026-02-22", f"Due date: {si[0][2].get('invoiceDueDate')}"
+
+
 # ============================================================
 # Run
 # ============================================================
