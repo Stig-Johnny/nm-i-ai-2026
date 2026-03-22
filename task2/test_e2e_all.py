@@ -655,8 +655,11 @@ TESTS = [
 
 
 if __name__ == "__main__":
+    import time as _time
     passed = 0
     failed = 0
+    _slow_tests = []
+    _total_start = _time.time()
 
     for t in TESTS:
         prompt = t["prompt"]
@@ -664,7 +667,11 @@ if __name__ == "__main__":
         is_complex = t.get("complex", False)
         short = prompt[:60]
 
+        _t_start = _time.time()
         plan, mock = run_prompt(prompt)
+        _t_elapsed = _time.time() - _t_start
+        if _t_elapsed > 0.05:
+            _slow_tests.append((f"{expected}: {short[:40]}", _t_elapsed))
 
         if plan is None:
             # Check if it would go to LLM (complex)
@@ -692,8 +699,13 @@ if __name__ == "__main__":
             print(f"  FAIL | {expected:30} | ERROR: {e} | {short}")
             failed += 1
 
+    total_elapsed = _time.time() - _total_start
     total = passed + failed
     print(f"\n{'='*60}")
-    print(f"E2E Results: {passed}/{total} passed, {failed} failed")
+    print(f"E2E Results: {passed}/{total} passed, {failed} failed in {total_elapsed:.2f}s")
+    if _slow_tests:
+        print(f"\nSlow tests (>50ms):")
+        for name, elapsed in sorted(_slow_tests, key=lambda x: -x[1])[:10]:
+            print(f"  {elapsed:.3f}s  {name}")
     if failed == 0:
         print("ALL TESTS PASSED")
