@@ -240,7 +240,7 @@ def regex_parse(prompt):
 
     # === PAYMENT (check before invoice — payment prompts also mention "invoice"/"faktura") ===
     if re.search(r'betaling|payment|zahlung|pago|paiement|pagamento', pl):
-        if not re.search(r'opprett|create|erstell|crea|crie|créez|fastpris|festpreis|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo|delbetaling|meilenstein|milestone|pedido|ordre|order.*invoice|konverter|converta|convert', pl):  # Not project invoice, order→invoice, or create
+        if not re.search(r'opprett|create|erstell|crea|crie|créez|fastpris|festpreis|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo|delbetaling|meilenstein|milestone|hito|jalon|pedido|ordre|order.*invoice|konverter|converta|convert', pl):  # Not project invoice, order→invoice, or create
             cust_name = find_name_after(p, 'kunden', 'customer', 'kunde', 'client', 'cliente')
             cust_org = find_org(p)
             amt = find_amount(p)
@@ -1353,38 +1353,51 @@ def handle_register_payment(base_url, token, e):
             vat_rate = float(e.get("vatRate") or 25)
             payment_amount = net * (1 + vat_rate / 100) if net else 0
 
-    st, resp = tx_put(base_url, token, f"/invoice/{inv_id}/:payment", params={
+    # Build payment params — use paidAmountCurrency for foreign currency invoices
+    # This lets Tripletex auto-calculate agio/disagio to 8060/8160
+    pay_params = {
         "paymentDate": e.get("date") or e.get("paymentDate") or today,
         "paymentTypeId": pt_id,
         "paidAmount": float(payment_amount),
-    })
-    print(f"invoice payment: {st} amount={payment_amount} {str(resp)[:200]}")
+    }
+    # For currency invoices, provide the foreign currency amount
+    inv_amount_eur = float(e.get("invoiceAmount") or e.get("invoiceAmountCurrency") or e.get("invoiceAmountEUR") or 0)
+    payment_nok = float(e.get("paymentAmountNOK") or e.get("paymentAmountNok") or e.get("paidAmountNOK") or 0)
+    if inv_amount_eur and payment_nok:
+        pay_params["paidAmount"] = payment_nok
+        pay_params["paidAmountCurrency"] = inv_amount_eur
 
-    # Post currency gain/loss (agio/disagio) if applicable
+    st, resp = tx_put(base_url, token, f"/invoice/{inv_id}/:payment", params=pay_params)
+    print(f"invoice payment: {st} amount={pay_params.get('paidAmount')} currency={pay_params.get('paidAmountCurrency', 'N/A')} {str(resp)[:200]}")
+
+    # Manual currency gain/loss voucher (fallback if Tripletex doesn't auto-post agio/disagio)
     currency_gain = float(e.get("currencyGainNOK") or e.get("currencyGain") or e.get("exchangeRateGain") or e.get("exchangeRateGainNOK") or e.get("agio") or 0)
     currency_loss = float(e.get("currencyLossNOK") or e.get("currencyLoss") or e.get("exchangeRateLoss") or e.get("exchangeRateLossNOK") or e.get("disagio") or 0)
     fx_amount = currency_gain or -currency_loss
-    if fx_amount:
-        # Use entity's exchange account if specified, else default 8060/8160
+    if fx_amount and not inv_amount_eur:
+        # Only post manual voucher if we didn't use paidAmountCurrency (which auto-handles it)
         fx_acct_num = int(e.get("exchangeDifferenceAccount") or e.get("exchangeAccount") or (8060 if fx_amount > 0 else 8160))
         fx_acct = find_account_id(base_url, token, fx_acct_num)
         if not fx_acct:
             fx_acct = find_account_id(base_url, token, 8060 if fx_amount > 0 else 8160)
         bank_acct = find_account_id(base_url, token, 1920)
         if fx_acct and bank_acct:
+            postings = [
+                {"row": 1, "date": e.get("date") or today,
+                 "description": "Agio" if fx_amount > 0 else "Disagio",
+                 "account": {"id": bank_acct},
+                 "amount": round(abs(fx_amount), 2), "amountCurrency": round(abs(fx_amount), 2),
+                 "amountGross": round(abs(fx_amount), 2), "amountGrossCurrency": round(abs(fx_amount), 2)},
+                {"row": 2, "date": e.get("date") or today,
+                 "description": "Valutagevinst" if fx_amount > 0 else "Valutatap",
+                 "account": {"id": fx_acct},
+                 "amount": round(-abs(fx_amount), 2), "amountCurrency": round(-abs(fx_amount), 2),
+                 "amountGross": round(-abs(fx_amount), 2), "amountGrossCurrency": round(-abs(fx_amount), 2)},
+            ]
             st_fx, resp_fx = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
                 "date": e.get("date") or today,
                 "description": f"Valutadifferanse {e.get('customerName', '')}".strip(),
-                "postings": [
-                    {"row": 1, "date": e.get("date") or today,
-                     "description": "Agio" if fx_amount > 0 else "Disagio",
-                     "account": {"id": bank_acct},
-                     "amountGross": round(abs(fx_amount), 2), "amountGrossCurrency": round(abs(fx_amount), 2)},
-                    {"row": 2, "date": e.get("date") or today,
-                     "description": "Valutagevinst" if fx_amount > 0 else "Valutatap",
-                     "account": {"id": fx_acct},
-                     "amountGross": round(-abs(fx_amount), 2), "amountGrossCurrency": round(-abs(fx_amount), 2)},
-                ],
+                "postings": postings,
             })
             print(f"currency {'gain' if fx_amount > 0 else 'loss'} voucher: {st_fx} amount={abs(fx_amount)}")
 
@@ -1960,34 +1973,55 @@ def handle_reverse_voucher(base_url, token, e):
     })
     vouchers = v_resp.get("values", [])
 
+    # Build set of invoice voucher IDs to exclude
+    invoice_voucher_ids = set()
+    for inv in invoices:
+        vid = inv.get("voucher", {}).get("id") if isinstance(inv.get("voucher"), dict) else inv.get("voucherId")
+        if vid:
+            invoice_voucher_ids.add(vid)
+
     # Try to find the payment voucher specifically
     target_voucher = None
 
-    # Look for vouchers with description matching the invoice/customer
+    # Priority 1: Match by description AND has bank account posting (1920) AND not invoice voucher
     search_terms = [t.lower() for t in [description, cust_name] if t]
     for v in vouchers:
+        if v["id"] in invoice_voucher_ids:
+            continue
         v_desc = (v.get("description") or "").lower()
-        if any(term in v_desc for term in search_terms if term):
-            # Check if this looks like a payment voucher (has bank account posting)
+        postings = v.get("postings", [])
+        has_bank = any(str(p.get("account", {}).get("number", "")) in ("1920", "1900") for p in postings if isinstance(p.get("account"), dict))
+        if any(term in v_desc for term in search_terms if term) and has_bank:
             target_voucher = v["id"]
             break
 
-    # If no match by description, look for vouchers linked to invoice voucher
-    if not target_voucher and invoices:
-        invoice_voucher_ids = set()
-        for inv in invoices:
-            vid = inv.get("voucher", {}).get("id") if isinstance(inv.get("voucher"), dict) else inv.get("voucherId")
-            if vid:
-                invoice_voucher_ids.add(vid)
-        # Payment voucher is typically NOT the invoice voucher, but posted after it
+    # Priority 2: Match by description only (not invoice voucher)
+    if not target_voucher:
         for v in vouchers:
-            if v["id"] not in invoice_voucher_ids:
+            if v["id"] in invoice_voucher_ids:
+                continue
+            v_desc = (v.get("description") or "").lower()
+            if any(term in v_desc for term in search_terms if term):
                 target_voucher = v["id"]
                 break
 
-    # Fallback: reverse most recent voucher
-    if not target_voucher and vouchers:
-        target_voucher = vouchers[-1]["id"]
+    # Priority 3: Any non-invoice voucher with bank account posting
+    if not target_voucher:
+        for v in vouchers:
+            if v["id"] in invoice_voucher_ids:
+                continue
+            postings = v.get("postings", [])
+            has_bank = any(str(p.get("account", {}).get("number", "")) in ("1920", "1900") for p in postings if isinstance(p.get("account"), dict))
+            if has_bank:
+                target_voucher = v["id"]
+                break
+
+    # Fallback: reverse most recent non-invoice voucher
+    if not target_voucher:
+        for v in reversed(vouchers):
+            if v["id"] not in invoice_voucher_ids:
+                target_voucher = v["id"]
+                break
 
     if not target_voucher:
         print("No vouchers to reverse")
@@ -3404,7 +3438,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0200"
+BUILD_VERSION = "v20260322-0215"
 
 @app.get("/health")
 def health():
