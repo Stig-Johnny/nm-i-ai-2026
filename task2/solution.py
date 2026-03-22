@@ -906,9 +906,14 @@ def handle_create_employee(base_url, token, e):
         # Add employment if startDate
         if e.get("startDate"):
             # Look up division (required for salary transactions)
-            _, div_resp = tx_get(base_url, token, "/division", {"count": 1})
+            _, div_resp = tx_get(base_url, token, "/division", {"count": 10})
             div_vals = div_resp.get("values", [])
             division_id = div_vals[0]["id"] if div_vals else None
+            if not division_id:
+                st_div, resp_div = tx_post(base_url, token, "/division", {
+                    "name": "Hovedvirksomhet", "startDate": "2024-01-01",
+                })
+                division_id = resp_div.get("value", {}).get("id")
 
             emp_body = {
                 "employee": {"id": emp_id},
@@ -953,10 +958,10 @@ def handle_create_employee(base_url, token, e):
                     occ_vals = []
                     occ_str = str(occ_code).strip()
                     if occ_str.isdigit():
-                        # Try exact code first
+                        # Try exact code first — API does fuzzy matching so verify result
                         _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
-                                            {"code": occ_str, "count": 1})
-                        occ_vals = occ_resp.get("values", [])
+                                            {"code": occ_str, "count": 10})
+                        occ_vals = [c for c in occ_resp.get("values", []) if str(c.get("code", "")).startswith(occ_str)]
                         # If no match and code is short (4-digit STYRK prefix), fetch many and find best prefix match
                         if not occ_vals and len(occ_str) <= 4:
                             _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
@@ -1543,10 +1548,10 @@ def handle_register_payment(base_url, token, e):
     fx_amount = currency_gain or -currency_loss
     if fx_amount:
         # Always post manual agio/disagio voucher — paidAmountCurrency may not auto-post to right accounts
-        fx_acct_num = int(e.get("exchangeDifferenceAccount") or e.get("exchangeAccount") or (8060 if fx_amount > 0 else 8160))
+        # Always use standard accounts: 8060 (agio/gain) or 8160 (disagio/loss)
+        # LLM sometimes suggests wrong accounts — ignore
+        fx_acct_num = 8060 if fx_amount > 0 else 8160
         fx_acct = find_account_id(base_url, token, fx_acct_num)
-        if not fx_acct:
-            fx_acct = find_account_id(base_url, token, 8060 if fx_amount > 0 else 8160)
         bank_acct = find_account_id(base_url, token, 1920)
         if fx_acct and bank_acct:
             postings = [
@@ -1727,13 +1732,25 @@ def handle_register_supplier_invoice(base_url, token, e):
 
     if st in (200, 201):
         val = resp.get("value", {})
-        print(f"  SI created: id={val.get('id')} amount={val.get('amount')} amountCurrency={val.get('amountCurrency')} voucherId={val.get('voucher',{}).get('id') if isinstance(val.get('voucher'),dict) else val.get('voucherId')}")
-        # Log voucher postings if available
-        voucher = val.get("voucher", {}) if isinstance(val.get("voucher"), dict) else {}
-        v_postings = voucher.get("postings", [])
-        for vp in v_postings[:5]:
-            acct = vp.get("account", {})
-            print(f"    posting: acct={acct.get('number','')} amount={vp.get('amount')} amountGross={vp.get('amountGross')} vatType={vp.get('vatType',{}).get('id') if isinstance(vp.get('vatType'),dict) else ''}")
+        si_id = val.get("id")
+        print(f"  SI created: id={si_id} amount={val.get('amount')} amountCurrency={val.get('amountCurrency')}")
+        # If amount is 0, try to update it via PUT
+        if si_id and (not val.get("amount") or val.get("amount") == 0):
+            try:
+                # Fetch current version
+                _, si_get = tx_get(base_url, token, f"/supplierInvoice/{si_id}", {"fields": "id,version"})
+                si_ver = si_get.get("value", {}).get("version", 0)
+                # Try updating with amountCurrency
+                st_put, resp_put = tx_put(base_url, token, f"/supplierInvoice/{si_id}", {
+                    "id": si_id, "version": si_ver,
+                    "invoiceDate": inv_date,
+                    "invoiceDueDate": inv_due,
+                    "invoiceNumber": e.get("invoiceNumber") or "",
+                    "amountCurrency": round(total_incl, 2),
+                })
+                print(f"  SI PUT amount: {st_put} {str(resp_put)[:200]}")
+            except Exception as e_put:
+                print(f"  SI PUT error: {e_put}")
         return True
 
     # Try 2: Without inline voucher (bare SI)
@@ -1786,10 +1803,19 @@ def handle_run_payroll(base_url, token, e):
     existing_employment = emp_resp.get("values", [])
 
     # Look up division (always — needed for new or existing employment)
-    _, div_resp = tx_get(base_url, token, "/division", {"count": 1})
+    _, div_resp = tx_get(base_url, token, "/division", {"count": 10})
     div_vals = div_resp.get("values", [])
     division_id = div_vals[0]["id"] if div_vals else None
-    print(f"division lookup: {len(div_vals)} found, id={division_id}")
+    # If no divisions exist, try to create one
+    if not division_id:
+        st_div, resp_div = tx_post(base_url, token, "/division", {
+            "name": "Hovedvirksomhet",
+            "startDate": "2024-01-01",
+        })
+        division_id = resp_div.get("value", {}).get("id")
+        print(f"division created: {st_div} id={division_id} {str(resp_div)[:200] if st_div != 201 else ''}")
+    else:
+        print(f"division found: {len(div_vals)}, id={division_id}")
 
     # If existing employment lacks division, update it
     if existing_employment:
@@ -2968,19 +2994,16 @@ def handle_year_end_closing(base_url, token, e):
         closing_date = f"{closing_year}-12-31"
     is_monthly = closing_month is not None
 
-    # 1. Depreciation vouchers
+    # 1. Depreciation vouchers — each asset as separate voucher (prompt says "separate")
     assets = e.get("depreciationAssets") or []
-    if assets:
-        postings = []
-        row = 1
-        for asset in assets:
-            # Use monthly depreciation if available (month-end), else annual
-            dep_amount = float(asset.get("monthlyDepreciation") or 0) if is_monthly else float(asset.get("annualDepreciation") or 0)
-            if not dep_amount:
-                cost = float(asset.get("originalCost") or 0)
-                years = int(asset.get("depreciationYears") or 1)
-                annual = cost / years
-                dep_amount = round(annual / 12, 2) if is_monthly else round(annual, 2)
+    for asset in assets:
+        # Use monthly depreciation if available (month-end), else annual
+        dep_amount = float(asset.get("monthlyDepreciation") or 0) if is_monthly else float(asset.get("annualDepreciation") or 0)
+        if not dep_amount:
+            cost = float(asset.get("originalCost") or 0)
+            years = int(asset.get("depreciationYears") or 1)
+            annual = cost / years
+            dep_amount = round(annual / 12, 2) if is_monthly else round(annual, 2)
             def _safe_int(v, default):
                 try: return int(v)
                 except (ValueError, TypeError): return default
@@ -3002,38 +3025,32 @@ def handle_year_end_closing(base_url, token, e):
                 # Last fallback: credit the asset account directly
                 accum_acct = find_account_id(base_url, token, asset_acct_num)
                 print(f"  using asset account {asset_acct_num} as last fallback")
-            print(f"  asset '{asset.get('assetName','')}': expense {exp_num}={expense_acct}, accum={accum_acct}, dep={dep_amount}")
+                print(f"  asset '{asset.get('assetName','')}': expense {exp_num}={expense_acct}, accum={accum_acct}, dep={dep_amount}")
             if expense_acct and accum_acct:
-                postings.append({
-                    "row": row, "date": closing_date,
-                    "description": f"Avskrivning {asset.get('assetName', '')}",
-                    "account": {"id": expense_acct},
-                    "amount": round(dep_amount, 2), "amountCurrency": round(dep_amount, 2), "amountGross": round(dep_amount, 2),
-                    "amountGrossCurrency": round(dep_amount, 2),
+                asset_postings = [
+                    {"row": 1, "date": closing_date,
+                     "description": f"Avskrivning {asset.get('assetName', '')}",
+                     "account": {"id": expense_acct},
+                     "amount": round(dep_amount, 2), "amountCurrency": round(dep_amount, 2), "amountGross": round(dep_amount, 2),
+                     "amountGrossCurrency": round(dep_amount, 2)},
+                    {"row": 2, "date": closing_date,
+                     "description": f"Akkumulert avskrivning {asset.get('assetName', '')}",
+                     "account": {"id": accum_acct},
+                     "amount": round(-dep_amount, 2), "amountCurrency": round(-dep_amount, 2), "amountGross": round(-dep_amount, 2),
+                     "amountGrossCurrency": round(-dep_amount, 2)},
+                ]
+                st, resp = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                    "date": closing_date,
+                    "description": f"Avskrivning {asset.get('assetName', '')} {closing_year}",
+                    "postings": asset_postings,
                 })
-                row += 1
-                postings.append({
-                    "row": row, "date": closing_date,
-                    "description": f"Akkumulert avskrivning {asset.get('assetName', '')}",
-                    "account": {"id": accum_acct},
-                    "amount": round(-dep_amount, 2), "amountCurrency": round(-dep_amount, 2), "amountGross": round(-dep_amount, 2),
-                    "amountGrossCurrency": round(-dep_amount, 2),
-                })
-                row += 1
-        if postings:
-            st, resp = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
-                "date": closing_date,
-                "description": f"Avskrivninger {closing_year}",
-                "postings": postings,
-            })
-            print(f"depreciation voucher: {st} {str(resp)[:200]}")
-            # Fallback: if period closed, retry with today's date
-            if st == 422 and "periode" in str(resp).lower():
-                for p in postings:
-                    p["date"] = today
-                st2, resp2 = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
-                    "date": today, "description": f"Avskrivninger {closing_year}", "postings": postings})
-                print(f"depreciation voucher (today): {st2} {str(resp2)[:200]}")
+                print(f"depreciation voucher '{asset.get('assetName','')}': {st} {str(resp)[:200]}")
+                if st == 422 and "periode" in str(resp).lower():
+                    for p in asset_postings:
+                        p["date"] = today
+                    st2, resp2 = tx_post(base_url, token, "/ledger/voucher?sendToLedger=true", {
+                        "date": today, "description": f"Avskrivning {asset.get('assetName', '')} {closing_year}", "postings": asset_postings})
+                    print(f"depreciation voucher (today): {st2}")
 
     # 2. Prepaid expense reversal
     prepaid_amount = float(e.get("prepaidAmount") or 0)
@@ -3171,14 +3188,21 @@ def handle_year_end_closing(base_url, token, e):
     # For now, use the result from the prompt if given, otherwise estimate
     taxable_result = float(e.get("taxableResult") or e.get("result") or e.get("pretaxResult") or e.get("resultBeforeTax") or 0)
     if not taxable_result:
-        # Try balanceSheet API for period income/expenses
+        # Try resultSheet API first (more accurate than balanceSheet for P&L)
         year = str(e.get("closingYear") or today[:4])
-        _, bs_resp = tx_get(base_url, token, "/balanceSheet", {
+        _, rs_resp = tx_get(base_url, token, "/resultSheet", {
             "dateFrom": f"{year}-01-01", "dateTo": f"{year}-12-31",
-            "accountNumberFrom": 3000, "accountNumberTo": 8999,
             "count": 200,
         })
-        bs_vals = bs_resp.get("values", [])
+        bs_vals = rs_resp.get("values", [])
+        if not bs_vals:
+            # Fallback to balanceSheet
+            _, bs_resp = tx_get(base_url, token, "/balanceSheet", {
+                "dateFrom": f"{year}-01-01", "dateTo": f"{year}-12-31",
+                "accountNumberFrom": 3000, "accountNumberTo": 8999,
+                "count": 200,
+            })
+            bs_vals = bs_resp.get("values", [])
         income = 0
         expenses = 0
         for v in bs_vals:
