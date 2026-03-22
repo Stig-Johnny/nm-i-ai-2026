@@ -220,7 +220,7 @@ def regex_parse(prompt):
         r'(?:faktura|invoice|rechnung|factura|fatura|facture).*(?:hours?|stund(?:en)?|timer?|horas?|timar?|heures?)',  # invoice + hours = project_invoice
         r'projektzyklus|project.*lifecycle|ciclo.*proyecto|cycle.*projet|ciclo.*projeto',  # project lifecycle (additional patterns)
         r'(?:tre|drei|three|tres|três)\s+.{0,30}(?:produkt|producto|produit|produto|product)',  # multi-line invoice with 3 products
-        r'fastpris|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo',  # fixed price project
+        r'fastpris|festpreis|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo',  # fixed price project
         r'kvittering|quittung|recibo(?!.*leverandør)|(?:despesa|gasto)\s+de\s+\w+\s+(?:deste|de\s+este)',  # receipt expense (always has files)
     ]
     for pat in complex_patterns:
@@ -240,7 +240,7 @@ def regex_parse(prompt):
 
     # === PAYMENT (check before invoice — payment prompts also mention "invoice"/"faktura") ===
     if re.search(r'betaling|payment|zahlung|pago|paiement|pagamento', pl):
-        if not re.search(r'opprett|create|erstell|crea|crie|créez|fastpris|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo|delbetaling|milestone|pedido|ordre|order.*invoice|konverter|converta|convert', pl):  # Not project invoice, order→invoice, or create
+        if not re.search(r'opprett|create|erstell|crea|crie|créez|fastpris|festpreis|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo|delbetaling|meilenstein|milestone|pedido|ordre|order.*invoice|konverter|converta|convert', pl):  # Not project invoice, order→invoice, or create
             cust_name = find_name_after(p, 'kunden', 'customer', 'kunde', 'client', 'cliente')
             cust_org = find_org(p)
             amt = find_amount(p)
@@ -3386,7 +3386,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0130"
+BUILD_VERSION = "v20260322-0150"
 
 @app.get("/health")
 def health():

@@ -1508,6 +1508,12 @@ def test_M07_simple_tasks_still_regex():
         assert plan["task_type"] == expected, f"Expected {expected}, got {plan['task_type']} for: {prompt[:50]}"
 
 
+def test_M08_german_festpreis_not_payment():
+    """Competition: German Festpreis/Meilensteinzahlung must NOT be register_payment (scored 2/8)."""
+    plan = regex_parse('Legen Sie einen Festpreis von 201450 NOK für das Projekt "Automatisierungsprojekt" für Grünfeld GmbH (Org.-Nr. 950208589) fest. Projektleiter ist Maximilian Schneider (maximilian.schneider@example.org). Stellen Sie dem Kunden 25 % des Festpreises als Meilensteinzahlung in Rechnung.')
+    assert plan is None, f"German Festpreis should go to LLM, got {plan['task_type'] if plan else None}"
+
+
 # ============================================================
 # Run
 # ============================================================
