@@ -957,12 +957,18 @@ def handle_create_employee(base_url, token, e):
                         _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
                                             {"code": occ_str, "count": 1})
                         occ_vals = occ_resp.get("values", [])
-                        # If no match and code is short (4-digit STYRK prefix), try as prefix
+                        # If no match and code is short (4-digit STYRK prefix), fetch many and find best prefix match
                         if not occ_vals and len(occ_str) <= 4:
                             _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
-                                                {"code": occ_str + "*", "count": 1})
-                            occ_vals = occ_resp.get("values", [])
-                        # Also try with trailing zeros
+                                                {"code": occ_str + "*", "count": 50})
+                            candidates = occ_resp.get("values", [])
+                            # Filter: code must START with our prefix
+                            occ_vals = [c for c in candidates if str(c.get("code", "")).startswith(occ_str)]
+                            if not occ_vals:
+                                # Try with trailing zeros (e.g. 4110 → 4110100)
+                                padded = occ_str + "1" + "0" * (6 - len(occ_str))
+                                occ_vals = [c for c in candidates if str(c.get("code", "")).startswith(occ_str)]
+                        # Fallback: try padded code directly
                         if not occ_vals and len(occ_str) <= 4:
                             padded = occ_str + "0" * (7 - len(occ_str))
                             _, occ_resp = tx_get(base_url, token, "/employee/employment/occupationCode",
@@ -974,7 +980,9 @@ def handle_create_employee(base_url, token, e):
                         occ_vals = occ_resp.get("values", [])
                     if occ_vals:
                         det_body["occupationCode"] = {"id": occ_vals[0]["id"]}
-                        print(f"occupationCode: {occ_vals[0]}")
+                        print(f"occupationCode: matched '{occ_str}' → {occ_vals[0].get('code')} '{occ_vals[0].get('nameNO')}'")
+                    else:
+                        print(f"occupationCode: no match for '{occ_str}'")
                 st_det, resp_det = tx_post(base_url, token, "/employee/employment/details", det_body)
                 print(f"employment details: {st_det} {str(resp_det)[:300] if st_det != 201 else ''}")
 
