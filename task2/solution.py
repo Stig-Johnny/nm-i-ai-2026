@@ -224,9 +224,9 @@ def regex_parse(prompt):
         r'purregebyr|purring|rappel|mahngebühr|reminder.*fee|frais de rappel|forfalt|forfallen|overdue|retard|en retard|vencida',  # reminder fee
         r'avstem|reconcil|abstimm|concili|rapprocher|bankutskrift|bank\s*statement|extrato\s*banc',  # bank reconciliation
         r'reverser|reverse|stornieren|annuler|anular|reverter|devolvido|retourné|returned.*bank',  # reverse voucher
-        r'feil i hovedbok|errors? in.*ledger|fehler.*hauptbuch|errores.*libro.*mayor|erreurs.*grand.*livre|erros.*livro',  # ledger correction
+        r'feil i hovedbok|feil i hovudboka|errors? in.*ledger|fehler.*hauptbuch|errores.*libro.*mayor|erreurs.*grand.*livre|erros.*livro',  # ledger correction
         r'årsoppgjør|year.end.*closing|jahresabschluss|monatsabschluss|cierre.*anual|clôture.*annuel|encerramento.*anual|månedsslutt|månavslutn|month.end.*closing|clôture.*mensuel|cierre.*mensual|encerramento.*mensal|rechnungsabgr',  # year-end/month-end
-        r'analysier|analyse.*hauptbuch|analyze.*ledger|analise.*livro|trois.*comptes|three.*accounts|drei.*konten',  # ledger analysis
+        r'analysier|analyser.*hovudboka|analyse.*hauptbuch|analyze.*ledger|analise.*livro|trois.*comptes|three.*accounts|drei.*konten|kostnadskontoane|expense.*accounts',  # ledger analysis
         r'livssyklus|lifecycle|lebenszyklus|ciclo.*vida|cycle.*vie',  # project lifecycle
         r'valutadifferanse|exchange.*rate.*differ|wechselkurs|tipo.*cambio|taux.*change|taxa.*câmbio|agio|disagio',  # currency payment
         r'konverter.*faktura.*betaling|convert.*invoice.*payment|wandeln.*rechnung.*zahlung|convertir.*factura.*pago|convertir.*facture.*paiement',  # order→invoice→payment
@@ -235,7 +235,7 @@ def regex_parse(prompt):
         r'dimensjon|dimensão|dimensión|dimension.*(?:verdiane|valores|valores|values|werte)',  # accounting dimension
         r'(?:hours?|stund(?:en)?|timer?|horas?|timar?|heures?)\s.*(?:faktura|invoice|rechnung|factura|fatura|facture)',  # hours + invoice = project_invoice
         r'(?:faktura|invoice|rechnung|factura|fatura|facture).*(?:hours?|stund(?:en)?|timer?|horas?|timar?|heures?)',  # invoice + hours = project_invoice
-        r'projektzyklus|project.*lifecycle|ciclo.*proyecto|cycle.*projet|ciclo.*projeto',  # project lifecycle (additional patterns)
+        r'projektzyklus|prosjektsyklus|project.*lifecycle|ciclo.*proyecto|cycle.*projet|ciclo.*projeto',  # project lifecycle (additional patterns)
         r'(?:tre|drei|three|tres|três)\s+.{0,30}(?:produkt|producto|produit|produto|product)',  # multi-line invoice with 3 products
         r'fastpris|festpreis|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo',  # fixed price project
         r'kvittering|quittung|recibo(?!.*leverandør)|(?:despesa|gasto)\s+de\s+\w+\s+(?:deste|de\s+este)',  # receipt expense (always has files)
@@ -3072,19 +3072,39 @@ def handle_correct_ledger_errors(base_url, token, e):
                      "account": {"id": correct_acct}, "amount": round(amount, 2), "amountCurrency": round(amount, 2), "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
                 ]
 
-        elif "duplic" in err_type:
-            # Duplicate voucher: reverse it — offset to correctAccount or 1920
+        elif "duplic" in err_type or "duplikat" in err_type:
+            # Duplicate voucher: try to find and reverse the actual duplicate
             acct_num = int(err.get("account") or err.get("wrongAccount") or err.get("accountNumber") or 0)
-            offset_num = int(err.get("correctAccount") or err.get("offsetAccount") or 1920)
-            acct_id = find_account_id(base_url, token, acct_num)
-            offset_id = find_account_id(base_url, token, offset_num) or find_account_id(base_url, token, 1920)
-            if acct_id and offset_id:
-                postings = [
-                    {"row": 1, "date": today, "description": f"Korreksjon: reversering duplikat bilag konto {acct_num}",
-                     "account": {"id": acct_id}, "amount": round(-amount, 2), "amountCurrency": round(-amount, 2), "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
-                    {"row": 2, "date": today, "description": f"Korreksjon: reversering duplikat motpost",
-                     "account": {"id": offset_id}, "amount": round(amount, 2), "amountCurrency": round(amount, 2), "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
-                ]
+            # Search vouchers for one matching this account + amount
+            reversed_ok = False
+            for v in vouchers:
+                v_postings = v.get("postings", [])
+                for vp in v_postings:
+                    vp_acct = vp.get("account", {})
+                    vp_num = int(vp_acct.get("number", 0) or 0) if isinstance(vp_acct, dict) else 0
+                    vp_amt = abs(float(vp.get("amount") or vp.get("amountGross") or 0))
+                    if vp_num == acct_num and abs(vp_amt - amount) < 1:
+                        # Found matching voucher — reverse it
+                        st_rev, resp_rev = tx_put(base_url, token, f"/ledger/voucher/{v['id']}/:reverse",
+                            params={"date": today})
+                        print(f"reverse duplicate voucher {v['id']}: {st_rev}")
+                        if st_rev in (200, 201):
+                            reversed_ok = True
+                        break
+                if reversed_ok:
+                    break
+            if not reversed_ok:
+                # Fallback: manual correction voucher
+                acct_id = find_account_id(base_url, token, acct_num)
+                offset_num = int(err.get("correctAccount") or err.get("offsetAccount") or 1920)
+                offset_id = find_account_id(base_url, token, offset_num) or find_account_id(base_url, token, 1920)
+                if acct_id and offset_id:
+                    postings = [
+                        {"row": 1, "date": today, "description": f"Korreksjon: reversering duplikat bilag konto {acct_num}",
+                         "account": {"id": acct_id}, "amount": round(-amount, 2), "amountCurrency": round(-amount, 2), "amountGross": round(-amount, 2), "amountGrossCurrency": round(-amount, 2)},
+                        {"row": 2, "date": today, "description": f"Korreksjon: reversering duplikat motpost",
+                         "account": {"id": offset_id}, "amount": round(amount, 2), "amountCurrency": round(amount, 2), "amountGross": round(amount, 2), "amountGrossCurrency": round(amount, 2)},
+                    ]
 
         elif "vat" in err_type.lower() or "mva" in err_type.lower():
             # Missing VAT line: add the missing VAT posting
@@ -3108,12 +3128,32 @@ def handle_correct_ledger_errors(base_url, token, e):
                 ]
 
         elif "amount" in err_type.lower() or "beløp" in err_type.lower():
-            # Wrong amount: reverse difference
+            # Wrong amount: reverse difference — find actual offset account from voucher
             acct_num = int(err.get("account") or err.get("wrongAccount") or err.get("accountNumber") or 0)
             wrong_amt = float(err.get("amount") or 0)
             correct_amt = float(err.get("correctAmount") or 0)
             diff = wrong_amt - correct_amt
-            offset_num = int(err.get("offsetAccount") or err.get("correctAccount") or 1920)
+            # Try to find the actual voucher to get the real offset account
+            offset_num = int(err.get("offsetAccount") or err.get("correctAccount") or 0)
+            if not offset_num:
+                for v in vouchers:
+                    v_postings = v.get("postings", [])
+                    for vp in v_postings:
+                        vp_acct = vp.get("account", {})
+                        vp_num = int(vp_acct.get("number", 0) or 0) if isinstance(vp_acct, dict) else 0
+                        vp_amt = abs(float(vp.get("amount") or vp.get("amountGross") or 0))
+                        if vp_num == acct_num and abs(vp_amt - wrong_amt) < 1:
+                            # Found the posting — look for the offset posting in same voucher
+                            for op in v_postings:
+                                op_num = int(op.get("account", {}).get("number", 0) or 0) if isinstance(op.get("account"), dict) else 0
+                                if op_num != acct_num and op_num > 0:
+                                    offset_num = op_num
+                                    break
+                            break
+                    if offset_num:
+                        break
+            if not offset_num:
+                offset_num = 1920
             acct_id = find_account_id(base_url, token, acct_num)
             offset_id = find_account_id(base_url, token, offset_num) or find_account_id(base_url, token, 1920)
             if acct_id and diff and offset_id:
@@ -3557,7 +3597,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0845"
+BUILD_VERSION = "v20260322-0850"
 
 @app.get("/health")
 def health():
