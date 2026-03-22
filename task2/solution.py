@@ -1533,8 +1533,8 @@ def handle_register_payment(base_url, token, e):
     currency_gain = float(e.get("currencyGainNOK") or e.get("currencyGain") or e.get("exchangeRateGain") or e.get("exchangeRateGainNOK") or e.get("agio") or 0)
     currency_loss = float(e.get("currencyLossNOK") or e.get("currencyLoss") or e.get("exchangeRateLoss") or e.get("exchangeRateLossNOK") or e.get("disagio") or 0)
     fx_amount = currency_gain or -currency_loss
-    if fx_amount and not inv_amount_eur:
-        # Only post manual voucher if we didn't use paidAmountCurrency (which auto-handles it)
+    if fx_amount:
+        # Always post manual agio/disagio voucher — paidAmountCurrency may not auto-post to right accounts
         fx_acct_num = int(e.get("exchangeDifferenceAccount") or e.get("exchangeAccount") or (8060 if fx_amount > 0 else 8160))
         fx_acct = find_account_id(base_url, token, fx_acct_num)
         if not fx_acct:
@@ -2234,8 +2234,8 @@ def handle_bank_reconciliation(base_url, token, e):
     transactions = e.get("bankTransactions") or e.get("transactions") or e.get("entries") or []
     # LLM sometimes splits into customerPayments + supplierPayments
     if not transactions:
-        cust_payments = e.get("customerPayments") or []
-        supp_payments = e.get("supplierPayments") or []
+        cust_payments = e.get("customerPayments") or e.get("incomingPayments") or e.get("inboundPayments") or e.get("receivedPayments") or []
+        supp_payments = e.get("supplierPayments") or e.get("outgoingPayments") or e.get("outboundPayments") or e.get("sentPayments") or []
         for cp in cust_payments:
             cp["customerName"] = cp.get("customerName", "")
             if cp.get("amount", 0) > 0:
@@ -2320,6 +2320,7 @@ def handle_bank_reconciliation(base_url, token, e):
                     print(f"supplier payment {tx_supp} amount={abs_amount}: {st_v} {str(resp_v)[:300] if st_v != 201 else ''}")
 
         # After all payments registered, create bank reconciliation entity
+        print(f"Starting bank reconciliation entity creation... | {time_remaining():.0f}s remaining")
         try:
             # Find bank account
             _, ba_resp = tx_get(base_url, token, "/bankAccount", {"count": 1})
