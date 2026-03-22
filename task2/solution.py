@@ -2351,9 +2351,9 @@ def handle_project_invoice(base_url, token, e):
                     "employee": {"id": p_id},
                     "adminAccess": False,
                 })
-                print(f"project participant {p_id}: {st_pp} {str(resp_pp)[:200] if st_pp != 201 else ''}")
-            except Exception:
-                pass
+                print(f"project participant {p_id}: {st_pp} {str(resp_pp)[:500]}")
+            except Exception as e_pp:
+                print(f"project participant error: {e_pp}")
 
     # Step 6: Set hourly cost/rate on employee for the project
     if emp_id and hourly_rate > 0:
@@ -2411,7 +2411,7 @@ def handle_project_invoice(base_url, token, e):
                 "date": today,
             }
             st_ol, resp_ol = tx_post(base_url, token, "/project/orderline", ol_body)
-            print(f"project order line: {st_ol} amount={fixed_price} {str(resp_ol)[:200] if st_ol != 201 else ''}")
+            print(f"project order line: {st_ol} amount={fixed_price} {str(resp_ol)[:500]}")
         except Exception as e_ol:
             print(f"project order line error: {e_ol}")
 
