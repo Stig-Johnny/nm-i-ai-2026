@@ -1,26 +1,30 @@
-# Competition Status — Last Updated 2026-03-21 20:20 CET
+# Competition Status — Last Updated 2026-03-22 02:30 CET
 
 ## ⚠️ REPO IS PRIVATE — MUST MAKE PUBLIC BEFORE SUNDAY 15:00 CET
 ```bash
 gh repo edit Stig-Johnny/nm-i-ai-2026 --visibility public --accept-visibility-change-consequences
 ```
 
-## Position: #90 overall, ~76 points (~19 hours remaining)
+## Position: #96 overall (~13 hours remaining)
 
 ## Our Scores
 
 | Task | Score | Owner |
 |------|-------|-------|
-| NorgesGruppen | 0.8987 mAP | Claude-5 |
+| NorgesGruppen | **0.9024 mAP** | Claude-5 |
 | Tripletex | 56.0 | Claude-4 |
 | Astar Island | 74.9 | iClaw-E (via Claude-3) |
 
 ## NorgesGruppen — Current State
 
-### Best Score: 0.8987 (v17a NMS ensemble v17-fulldata + v8x)
+### Best Score: 0.9024 (3-model ensemble v19fp16+v20fp16+v8x)
 
-### Key Discovery: Full-Data Training
-Training on ALL 248 images (no val holdout) improved test score. v17 (full-data YOLOv8l@1280) + v8x ensemble beat previous best by 0.0013.
+### Key Discoveries
+1. **Full-data training** — all 248 images, no val holdout
+2. **Architecture diversity** — YOLOv8x + YOLOv8l in ensemble
+3. **Augmentation diversity** — different aug configs per model
+4. **3-model ensemble** — v19(full-data x) + v20(full-data l alt) + v8x(85/15 x) = 0.9024
+5. **Hard NMS 0.5 beats soft-NMS and higher thresholds** on real test set
 
 ### Submission History
 
@@ -29,13 +33,15 @@ Training on ALL 248 images (no val holdout) improved test score. v17 (full-data 
 | v4 | 0.6724 | YOLOv8m@640 ONNX | First score |
 | v5 | 0.8927 | YOLOv8l@1280 ONNX | Cloud GPU + imgsz=1280 = huge gain |
 | v8x | 0.8928 | YOLOv8x@1280 ONNX | Bigger model = marginal |
-| v6 | 0.8974 | NMS ensemble v5l+v8x | Previous best — ensemble helps |
+| v6 | 0.8974 | NMS ensemble v5l+v8x | Ensemble helps |
 | v9 | 0.8497 | WBF ensemble + TTA | WBF hurt — bad score averaging |
-| v11 | 0.8965 | NMS ensemble v5l+diverse | Diverse model didn't help in ensemble |
-| v12 | 0.8943 | Diverse single | Highest val mAP (0.704) but lower test |
 | v14 | 0.8929 | Per-class NMS v5l | Per-class NMS didn't help |
-| v16 | 0.8944 | Soft-NMS ensemble v5l+v8x | Soft-NMS slightly worse than hard |
-| v17a | 0.8987 | **NMS ensemble v17-fulldata+v8x** | **NEW BEST — full-data training works** |
+| v16 | 0.8944 | Soft-NMS ensemble v5l+v8x | Soft-NMS worse than hard |
+| v17a | 0.8987 | NMS ensemble v17-fulldata+v8x | Full-data training works |
+| safe | 0.8994 | NMS ensemble v17+v20 | Alt augmentation helps |
+| v17a_065 | 0.8973 | NMS 0.65 v17+v8x | Higher NMS threshold hurts |
+| v19v20 | 0.9022 | NMS ensemble v19fp16+v20 | Architecture diversity + full-data |
+| 3model | 0.9024 | **v19fp16+v20fp16+v8x** | **BEST — 3 diverse models** |
 
 ### Available Models (local in task4/)
 
