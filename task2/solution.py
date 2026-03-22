@@ -201,18 +201,7 @@ def regex_parse(prompt):
             "entities": {"employeeName": emp_name, "employeeEmail": email, "title": title_match.group(1) if title_match else None, "expenses": expenses, "diet": diet},
         }
 
-    # === DEPARTMENT (check before customer — "departments" is specific) ===
-    if re.search(r'avdeling|department|abteilung|departamento|département', pl):
-        dept_names = re.findall(r'"([^"]+)"', p)
-        if len(dept_names) >= 2:
-            return {"task_type": "create_department", "entities": {"items": dept_names}}
-        elif dept_names:
-            return {"task_type": "create_department", "entities": {"name": dept_names[0]}}
-        else:
-            name_match = re.search(r'(?:navn|name|nombre|nom)\s+["\']?(\w[\w\s]*)', p)
-            return {"task_type": "create_department", "entities": {"name": name_match.group(1).strip() if name_match else "Department"}}
-
-    # === COMPLEX TASKS — always delegate to LLM ===
+    # === COMPLEX TASKS — always delegate to LLM (check BEFORE department/product/project) ===
     # These tasks mention keywords that regex might misclassify (e.g. "faktura" in reminder, "betaling" in bank reconciliation)
     complex_patterns = [
         r'purregebyr|purring|rappel|mahngebühr|reminder.*fee|frais de rappel|forfalt|forfallen|overdue|retard|en retard|vencida',  # reminder fee
@@ -232,10 +221,22 @@ def regex_parse(prompt):
         r'projektzyklus|project.*lifecycle|ciclo.*proyecto|cycle.*projet|ciclo.*projeto',  # project lifecycle (additional patterns)
         r'(?:tre|drei|three|tres|três)\s+.{0,30}(?:produkt|producto|produit|produto|product)',  # multi-line invoice with 3 products
         r'fastpris|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo',  # fixed price project
+        r'kvittering|quittung|recibo(?!.*leverandør)|(?:despesa|gasto)\s+de\s+\w+\s+(?:deste|de\s+este)',  # receipt expense (always has files)
     ]
     for pat in complex_patterns:
         if re.search(pat, pl):
             return None  # Delegate to LLM
+
+    # === DEPARTMENT (check after complex patterns — "avdeling" appears in receipts too) ===
+    if re.search(r'avdeling|department|abteilung|departamento|département', pl):
+        dept_names = re.findall(r'"([^"]+)"', p)
+        if len(dept_names) >= 2:
+            return {"task_type": "create_department", "entities": {"items": dept_names}}
+        elif dept_names:
+            return {"task_type": "create_department", "entities": {"name": dept_names[0]}}
+        else:
+            name_match = re.search(r'(?:navn|name|nombre|nom)\s+["\']?(\w[\w\s]*)', p)
+            return {"task_type": "create_department", "entities": {"name": name_match.group(1).strip() if name_match else "Department"}}
 
     # === PAYMENT (check before invoice — payment prompts also mention "invoice"/"faktura") ===
     if re.search(r'betaling|payment|zahlung|pago|paiement|pagamento', pl):
@@ -1513,38 +1514,38 @@ def handle_register_supplier_invoice(base_url, token, e):
     inv_date = e.get("invoiceDate") or today
     inv_due = e.get("invoiceDueDate") or str(date.today() + timedelta(days=30))
 
-    # Try 1: Minimal SI without voucher (proxy may reject inline vouchers)
-    si_minimal = {
+    # Try 1: SI with inline voucher (NO amountCurrency — causes 500 in proxy)
+    si_body = {
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
         "invoiceNumber": e.get("invoiceNumber") or "",
-        "amountCurrency": round(total_incl, 2),
         "supplier": {"id": supplier_id} if supplier_id else None,
+        "voucher": {
+            "date": inv_date,
+            "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
+            "postings": si_postings,
+        },
     }
-    if si_minimal.get("supplier") is None:
-        si_minimal.pop("supplier", None)
+    if si_body.get("supplier") is None:
+        si_body.pop("supplier", None)
 
-    st, resp = tx_post(base_url, token, "/supplierInvoice", si_minimal)
-    print(f"supplierInvoice (minimal): {st} {str(resp)[:300]}")
-
-    if st in (200, 201):
-        val = resp.get("value", {})
-        print(f"  amount={val.get('amount')} amountCurrency={val.get('amountCurrency')} id={val.get('id')}")
-        return True
-
-    # Try 2: With inline voucher
-    si_minimal["voucher"] = {
-        "date": inv_date,
-        "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
-        "postings": si_postings,
-    }
-    st, resp = tx_post(base_url, token, "/supplierInvoice", si_minimal)
+    st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
     print(f"supplierInvoice (with voucher): {st} {str(resp)[:300]}")
 
     if st in (200, 201):
+        val = resp.get("value", {})
+        print(f"  SI created: id={val.get('id')}")
         return True
 
-    # Fallback: raw voucher only if supplierInvoice failed
+    # Try 2: Without inline voucher (bare SI)
+    si_body.pop("voucher", None)
+    st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
+    print(f"supplierInvoice (minimal): {st} {str(resp)[:300]}")
+
+    if st in (200, 201):
+        return True
+
+    # Fallback: raw voucher (always works but scorer may not recognize as SI)
     print("supplierInvoice failed, trying raw voucher")
     voucher_body = {
         "date": inv_date,
@@ -3385,7 +3386,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0100"
+BUILD_VERSION = "v20260322-0130"
 
 @app.get("/health")
 def health():

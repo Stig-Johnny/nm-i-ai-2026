@@ -523,6 +523,134 @@ TESTS = [
         "checks": lambda p, m: True,
         "complex": True,
     },
+
+    # ====== COMPREHENSIVE COVERAGE — every task type from 294 competition requests ======
+
+    # --- REVERSE VOUCHER ---
+    {
+        "prompt": "Betalingen fra Snøhetta AS (org.nr 962427715) for fakturaen \"Systemutvikling\" (42350 kr ekskl. MVA) ble feilaktig registrert. Reverser den opprinnelige betalingsregistreringen.",
+        "task_type": "reverse_voucher",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- CURRENCY PAYMENT ---
+    {
+        "prompt": "Vi sendte en faktura på 4868 EUR til Tindra AS (org.nr 892855234) da kursen var 10.15 NOK/EUR. Kunden har nå betalt, men kursen er 11.12 NOK/EUR. Registrer betalingen med korrekt valutadifferanse.",
+        "task_type": "currency_payment",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+    {
+        "prompt": "We sent an invoice for 1791 EUR to Silveroak Ltd (org no. 906661551) when the exchange rate was 11.03 NOK/EUR. The customer has now paid, but the rate is 10.66 NOK/EUR. Register the payment with the correct exchange difference.",
+        "task_type": "currency_payment",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- CORRECT LEDGER ERRORS ---
+    {
+        "prompt": 'Vi har oppdaget feil i hovedboken for januar og februar 2026. Gå gjennom alle bilag og finn de 4 feilene: en postering på feil konto (konto 6860 brukt i stedet for 7000).',
+        "task_type": "correct_ledger_errors",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+    {
+        "prompt": "Wir haben Fehler im Hauptbuch für Januar und Februar 2026 entdeckt. Überprüfen Sie alle Belege und finden Sie die 4 Fehler.",
+        "task_type": "correct_ledger_errors",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- BANK RECONCILIATION ---
+    {
+        "prompt": "Avstem bankutskriften (vedlagt CSV) mot åpne fakturaer i Tripletex. Match innbetalinger til kundefakturaer og utbetalinger til leverandørfakturaer.",
+        "task_type": "bank_reconciliation",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- YEAR-END CLOSING ---
+    {
+        "prompt": "Realice el cierre anual simplificado de 2025: 1) Calcule y contabilice la depreciación anual de tres activos: Kjøretøy (61850 NOK, 3 años lineales, cuenta 1230).",
+        "task_type": "year_end_closing",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- LEDGER ANALYSIS ---
+    {
+        "prompt": "Die Gesamtkosten sind von Januar bis Februar 2026 deutlich gestiegen. Analysieren Sie das Hauptbuch und identifizieren Sie die drei Aufwandskonten mit dem größten Anstieg.",
+        "task_type": "ledger_analysis",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- PROJECT LIFECYCLE ---
+    {
+        "prompt": "Execute the complete project lifecycle for 'Cloud Migration Northwave' (Northwave Ltd, org no. 932075482): 1) The project has a budget of 396900 NOK. 2) Register time.",
+        "task_type": "project_lifecycle",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- ACCOUNTING DIMENSION ---
+    {
+        "prompt": 'Opprett ein fri rekneskapsdimensjon "Marked" med verdiane "Offentlig" og "Privat". Bokfør deretter eit bilag på konto 7300 for 49300 kr, knytt til dimensjonsverdien "Privat".',
+        "task_type": "create_accounting_dimension",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- INVOICE WITH PAYMENT (Norwegian) ---
+    {
+        "prompt": 'Opprett en ordre for kunden Snøhetta AS (org.nr 914443806) med produktene Datarådgivning (7906) til 34450 kr og Systemutvikling (9594) til 17800 kr. Konverter ordren til faktura og registrer full betaling.',
+        "task_type": "invoice_with_payment",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- RECEIPT EXPENSE (always have PDF files — in production regex is skipped) ---
+    {
+        "prompt": "Vi trenger Togbillett fra denne kvitteringen bokført på avdeling Logistikk. Bruk riktig utgiftskonto basert på kjøpet, og sørg for korrekt MVA-behandling.",
+        "task_type": "register_receipt_expense",
+        "checks": lambda p, m: True,
+        "complex": True,  # Has files → regex skipped in production
+    },
+    {
+        "prompt": "Necesitamos el gasto de Togbillett de este recibo registrado en el departamento Produksjon. Usa la cuenta de gastos correcta y asegura el tratamiento correcto del IVA.",
+        "task_type": "register_receipt_expense",
+        "checks": lambda p, m: True,
+        "complex": True,  # Has files → regex skipped in production
+    },
+
+    # --- SUPPLIER INVOICE (German, text-only) ---
+    {
+        "prompt": "Wir haben die Rechnung INV-2026-8810 vom Lieferanten Sonnental GmbH (Org.-Nr. 988926221) über 8050 NOK einschließlich MwSt. erhalten. Der Betrag betrifft Bürodienstleistungen (Konto 6540). Registrieren Sie die Lieferantenrechnung mit korrekter Vorsteuer (25 %).",
+        "task_type": "register_supplier_invoice",
+        "checks": lambda p, m: (
+            p["entities"]["invoiceNumber"] == "INV-2026-8810"
+            and p["entities"]["totalAmountInclVat"] == 8050.0
+        ),
+    },
+
+    # --- TRAVEL EXPENSE (German) ---
+    {
+        "prompt": 'Erfassen Sie eine Reisekostenabrechnung für Johanna Hoffmann (johanna.hoffmann@example.org) für "Kundenbesuch Bergen". Die Reise dauerte 3 Tage mit Tagegeld (Tagessatz 800 NOK). Auslagen: Flugticket 4100 NOK und Taxi 600 NOK.',
+        "task_type": "create_travel_expense",
+        "checks": lambda p, m: True,
+        "complex": True,
+    },
+
+    # --- PAYROLL (Nynorsk) ---
+    {
+        "prompt": "Køyr løn for Gunnhild Aasen (gunnhild.aasen@example.org) for denne månaden. Grunnløn er 51800 kr. Legg til ein eingongsbonus på 5700 kr i tillegg til grunnløna.",
+        "task_type": "run_payroll",
+        "checks": lambda p, m: (
+            p["entities"]["baseSalary"] == 51800.0
+            and p["entities"]["bonus"] == 5700.0
+        ),
+    },
 ]
 
 
