@@ -1620,6 +1620,63 @@ def test_ALL_handler_aliases_exercise():
                 raise AssertionError(f"Handler '{name}' has code error: {e}")
 
 
+def test_STYRK_prefix_filter():
+    """STYRK wildcard must filter by prefix — 4110* must NOT match 3341103."""
+    from task2.solution import handle_create_employee, normalize_entities
+    # Mock that returns wrong code for wildcard but right code exists
+    mock = APIMock()
+    call_log = []
+    original_get = mock.get
+    def tracking_get(base_url, token, path, params=None):
+        call_log.append((path, params))
+        if "/occupationCode" in path:
+            code = (params or {}).get("code", "")
+            if code == "4110":
+                return 200, {"values": []}  # No exact match
+            if code == "4110*":
+                # Return codes that DON'T start with 4110 (wrong matches)
+                return 200, {"values": [
+                    {"id": 9, "code": "3341103", "nameNO": "ADJUNKT (YRKESFAG)"},
+                    {"id": 100, "code": "4110101", "nameNO": "KONTORMEDARBEIDER"},
+                ]}
+            if code == "4110000":
+                return 200, {"values": []}
+        return original_get(base_url, token, path, params)
+
+    entities = normalize_entities({
+        "firstName": "Test", "lastName": "User",
+        "startDate": "2026-01-01", "occupationCode": "4110",
+    })
+    with patch('task2.solution.tx_get', tracking_get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        handle_create_employee("https://mock/v2", "tok", entities)
+    # Check that employment details were posted with correct occupation code
+    det_posts = [(m, p, b) for m, p, b in mock.calls if m == "POST" and "employment/details" in p]
+    if det_posts:
+        occ = det_posts[0][2].get("occupationCode", {})
+        # Must be id=100 (4110101) NOT id=9 (3341103)
+        assert occ.get("id") != 9, f"Matched wrong code 3341103 instead of filtering by prefix"
+        assert occ.get("id") == 100, f"Should match 4110101, got id={occ.get('id')}"
+
+
+def test_currency_payment_always_posts_agio():
+    """Currency payment must always post manual agio/disagio voucher."""
+    from task2.solution import handle_register_payment, normalize_entities
+    mock = APIMock()
+    entities = normalize_entities({
+        "customerName": "Test AS", "customerOrgNumber": "123456789",
+        "invoiceAmountEUR": 1000, "paymentAmountNOK": 12000,
+        "currencyGainNOK": 500,
+    })
+    with patch('task2.solution.tx_get', mock.get), \
+         patch('task2.solution.tx_post', mock.post), \
+         patch('task2.solution.tx_put', mock.put):
+        handle_register_payment("https://mock/v2", "tok", entities)
+    vouchers = posts(mock, "/ledger/voucher")
+    assert len(vouchers) >= 1, "Should post manual agio voucher even with paidAmountCurrency"
+
+
 # ============================================================
 # Run
 # ============================================================
