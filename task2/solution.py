@@ -2270,17 +2270,8 @@ def handle_project_invoice(base_url, token, e):
     proj_id = proj_resp.get("value", {}).get("id")
     print(f"create project: {st} id={proj_id} {str(proj_resp)[:200] if st != 201 else ''}")
 
-    # Step 3b: Add project participant (PM/employee)
-    if proj_id and emp_id:
-        try:
-            st_pp, resp_pp = tx_post(base_url, token, "/project/participant", {
-                "project": {"id": proj_id},
-                "employee": {"id": emp_id},
-                "adminAccess": True,
-            })
-            print(f"project participant: {st_pp} {str(resp_pp)[:200] if st_pp != 201 else ''}")
-        except Exception:
-            pass
+    # Step 3b: Add project participants (after timesheet so employees exist)
+    # Moved to after Step 5 (timesheet registration)
 
     # Step 4: Find or create activity
     activity_name = e.get("activityName") or e.get("activity") or e.get("description") or "Arbeid"
@@ -2347,6 +2338,22 @@ def handle_project_invoice(base_url, token, e):
             ts_body["activity"] = {"id": act_id}
         st_ts, ts_resp = tx_post(base_url, token, "/timesheet/entry", ts_body)
         print(f"timesheet entry: {st_ts} {str(ts_resp)[:200]}")
+
+    # Step 5b: Add project participants (PM + any timesheet employees)
+    if proj_id:
+        participant_ids = set()
+        if emp_id:
+            participant_ids.add(emp_id)
+        for p_id in participant_ids:
+            try:
+                st_pp, resp_pp = tx_post(base_url, token, "/project/participant", {
+                    "project": {"id": proj_id},
+                    "employee": {"id": p_id},
+                    "adminAccess": False,
+                })
+                print(f"project participant {p_id}: {st_pp} {str(resp_pp)[:200] if st_pp != 201 else ''}")
+            except Exception:
+                pass
 
     # Step 6: Set hourly cost/rate on employee for the project
     if emp_id and hourly_rate > 0:
@@ -3615,7 +3622,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0945"
+BUILD_VERSION = "v20260322-1010"
 
 @app.get("/health")
 def health():
