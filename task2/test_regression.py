@@ -1583,20 +1583,35 @@ def test_M13_supplier_invoice_uses_dueDate():
 # ============================================================
 
 if __name__ == "__main__":
+    import time as _time
     tests = sorted([f for f in dir() if f.startswith('test_') and callable(eval(f))])
     passed = failed = 0
+    slow_tests = []
+    total_start = _time.time()
     for t in tests:
+        t_start = _time.time()
         try:
             eval(f"{t}()")
+            elapsed = _time.time() - t_start
             passed += 1
             doc = eval(f"{t}.__doc__") or ""
-            print(f"  PASS | {t}: {doc.strip()}")
+            marker = " ⚠️SLOW" if elapsed > 0.1 else ""
+            print(f"  PASS | {t}: {doc.strip()} ({elapsed:.3f}s{marker})")
+            if elapsed > 0.1:
+                slow_tests.append((t, elapsed))
         except AssertionError as e:
             print(f"  FAIL | {t}: {e}")
             failed += 1
         except Exception as e:
             print(f"  ERR  | {t}: {type(e).__name__}: {e}")
             failed += 1
-    print(f"\n{passed}/{passed+failed} passed")
+    total_elapsed = _time.time() - total_start
+    print(f"\n{passed}/{passed+failed} passed in {total_elapsed:.2f}s")
+    if slow_tests:
+        print(f"\nSlow tests (>100ms):")
+        for t, elapsed in sorted(slow_tests, key=lambda x: -x[1]):
+            print(f"  {elapsed:.3f}s  {t}")
+    if failed:
+        sys.exit(1)
     if failed:
         sys.exit(1)

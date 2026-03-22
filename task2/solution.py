@@ -520,7 +520,7 @@ def _parse_with_sdk(prompt, raw_files):
 
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
+            max_tokens=512,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": content}],
         )
@@ -536,9 +536,9 @@ def _parse_with_cli(full_prompt):
     """Parse using claude CLI subprocess."""
     try:
         result = subprocess.run(
-            [CLAUDE_PATH, "-p", "--model", "haiku", SYSTEM_PROMPT],
+            [CLAUDE_PATH, "-p", "--model", "haiku", "--max-tokens", "512", SYSTEM_PROMPT],
             input=full_prompt,
-            capture_output=True, text=True, timeout=45
+            capture_output=True, text=True, timeout=30
         )
         raw = result.stdout.strip()
         print(f"LLM raw: {raw[:400]}")
@@ -644,19 +644,24 @@ def get_or_create_supplier(base_url, token, name=None, org_number=None, email=No
     st, resp = tx_post(base_url, token, "/supplier", body)
     return resp.get("value", {}).get("id")
 
+_bank_ensured = False
+
 def ensure_bank_account(base_url, token):
-    """Ensure ledger account 1920 has a bank account number (required for invoicing)."""
+    """Ensure ledger account 1920 has a bank account number (required for invoicing). Cached."""
+    global _bank_ensured
+    if _bank_ensured:
+        return
     st, resp = tx_get(base_url, token, "/ledger/account", {"number": "1920", "fields": "id,number,bankAccountNumber"})
     accts = resp.get("values", []) if st == 200 else []
     if not accts:
         return
     acct = accts[0]
-    if acct.get("bankAccountNumber"):
-        return
-    tx_put(base_url, token, f"/ledger/account/{acct['id']}", {
-        "id": acct["id"], "number": 1920, "name": "Bankinnskudd",
-        "bankAccountNumber": "86010517941",
-    })
+    if not acct.get("bankAccountNumber"):
+        tx_put(base_url, token, f"/ledger/account/{acct['id']}", {
+            "id": acct["id"], "number": 1920, "name": "Bankinnskudd",
+            "bankAccountNumber": "86010517941",
+        })
+    _bank_ensured = True
 
 def put_employee(base_url, token, emp_id, body):
     """PUT employee with fresh version to avoid 409 RevisionException."""
@@ -683,10 +688,18 @@ def _posting(row, date_str, desc, acct_id, amount, **kwargs):
     return p
 
 
+_account_cache = {}
+
 def find_account_id(base_url, token, number):
+    """Find account ID by number. Cached per request to avoid repeated API calls."""
+    cache_key = f"{base_url}:{number}"
+    if cache_key in _account_cache:
+        return _account_cache[cache_key]
     st, resp = tx_get(base_url, token, "/ledger/account", {"number": str(number), "fields": "id,number"})
     vals = resp.get("values", []) if st == 200 else []
-    return vals[0]["id"] if vals else None
+    result = vals[0]["id"] if vals else None
+    _account_cache[cache_key] = result
+    return result
 
 # ============================================================
 # Task handlers
@@ -3530,6 +3543,9 @@ async def solve(request: Request):
         return JSONResponse({"status": "completed"})
 
 async def _solve_inner(request: Request):
+    global _bank_ensured
+    _account_cache.clear()  # Fresh cache per request
+    _bank_ensured = False
     body = await request.json()
     prompt = body.get("prompt", "")
     files = body.get("files", [])
@@ -3599,7 +3615,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0920"
+BUILD_VERSION = "v20260322-0930"
 
 @app.get("/health")
 def health():
