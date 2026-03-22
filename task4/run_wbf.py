@@ -97,7 +97,8 @@ def weighted_box_fusion(boxes_list, scores_list, labels_list, iou_thr=0.55, skip
     fused_b, fused_s, fused_l = [], [], []
     for w_box, w_score, count, label in clusters:
         fused_b.append(w_box / w_score)
-        fused_s.append(w_score / n_models)
+        # Use average score of contributing detections, not divided by total models
+        fused_s.append(w_score / count)
         fused_l.append(label)
 
     return np.array(fused_b), np.array(fused_s), np.array(fused_l, dtype=int)

@@ -1,146 +1,90 @@
-"""
-NorgesGruppen — ONNX Runtime, multi-class (356 categories)
-"""
-
-import json
-import argparse
-import numpy as np
+"""NorgesGruppen — Multi-model ONNX ensemble with NMS
+Best score: 0.9024 mAP with v19_fp16 + v20_fp16 + v8x (3 models)
+Supports FP16 and FP32 ONNX models automatically."""
+import json, argparse, numpy as np
 from pathlib import Path
-
 import onnxruntime as ort
 from PIL import Image
 
+def preprocess(img, imgsz=1280):
+    ow,oh=img.size; s=min(imgsz/ow,imgsz/oh)
+    nw,nh=int(ow*s),int(oh*s)
+    r=img.resize((nw,nh),Image.BILINEAR)
+    c=Image.new("RGB",(imgsz,imgsz),(114,114,114))
+    px,py=(imgsz-nw)//2,(imgsz-nh)//2
+    c.paste(r,(px,py))
+    a=np.array(c,dtype=np.float32)/255.0
+    return a.transpose(2,0,1)[np.newaxis],ow,oh,s,px,py
 
-def preprocess(img_path, imgsz=640):
-    img = Image.open(str(img_path)).convert("RGB")
-    orig_w, orig_h = img.size
-    scale = min(imgsz / orig_w, imgsz / orig_h)
-    new_w, new_h = int(orig_w * scale), int(orig_h * scale)
-    img_resized = img.resize((new_w, new_h), Image.BILINEAR)
-    canvas = Image.new("RGB", (imgsz, imgsz), (114, 114, 114))
-    pad_x = (imgsz - new_w) // 2
-    pad_y = (imgsz - new_h) // 2
-    canvas.paste(img_resized, (pad_x, pad_y))
-    arr = np.array(canvas, dtype=np.float32) / 255.0
-    arr = arr.transpose(2, 0, 1)
-    arr = np.expand_dims(arr, 0)
-    return arr, orig_w, orig_h, scale, pad_x, pad_y
-
-
-def nms(boxes, scores, iou_thresh=0.5):
-    if len(boxes) == 0:
-        return []
-    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-    areas = (x2 - x1) * (y2 - y1)
-    order = scores.argsort()[::-1]
-    keep = []
-    while len(order) > 0:
-        i = order[0]
-        keep.append(i)
-        if len(order) == 1:
-            break
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-        inter = np.maximum(0, xx2 - xx1) * np.maximum(0, yy2 - yy1)
-        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
-        order = order[1:][iou <= iou_thresh]
+def nms(boxes,scores,t=0.5):
+    if len(boxes)==0: return []
+    x1,y1,x2,y2=boxes[:,0],boxes[:,1],boxes[:,2],boxes[:,3]
+    areas=(x2-x1)*(y2-y1); order=scores.argsort()[::-1]; keep=[]
+    while len(order)>0:
+        i=order[0]; keep.append(i)
+        if len(order)==1: break
+        xx1=np.maximum(x1[i],x1[order[1:]]); yy1=np.maximum(y1[i],y1[order[1:]])
+        xx2=np.minimum(x2[i],x2[order[1:]]); yy2=np.minimum(y2[i],y2[order[1:]])
+        inter=np.maximum(0,xx2-xx1)*np.maximum(0,yy2-yy1)
+        iou=inter/(areas[i]+areas[order[1:]]-inter+1e-6)
+        order=order[1:][iou<=t]
     return keep
 
+def decode(out,ow,oh,s,px,py,conf=0.001):
+    p=out[0]
+    if len(p.shape)==3: p=p[0]
+    if p.shape[0]<p.shape[1]: p=p.T
+    b,sc=p[:,:4],p[:,4:]; ms=sc.max(axis=1); m=ms>=conf
+    b,ms,ci=b[m],ms[m],sc[m].argmax(axis=1)
+    if len(b)==0: return np.zeros((0,4)),np.zeros(0),np.zeros(0,dtype=int)
+    cx,cy,bw,bh=b[:,0],b[:,1],b[:,2],b[:,3]
+    x1=np.clip((cx-bw/2-px)/s,0,ow); y1=np.clip((cy-bh/2-py)/s,0,oh)
+    x2=np.clip((cx+bw/2-px)/s,0,ow); y2=np.clip((cy+bh/2-py)/s,0,oh)
+    return np.stack([x1,y1,x2,y2],axis=1),ms,ci
 
-def postprocess(output, orig_w, orig_h, scale, pad_x, pad_y, conf_thresh=0.001, iou_thresh=0.5):
-    preds = output[0]
-    if len(preds.shape) == 3:
-        preds = preds[0]
-    if preds.shape[0] < preds.shape[1]:
-        preds = preds.T
-
-    boxes_cxcywh = preds[:, :4]
-    scores = preds[:, 4:]
-    max_scores = scores.max(axis=1)
-
-    mask = max_scores >= conf_thresh
-    boxes_cxcywh = boxes_cxcywh[mask]
-    max_scores = max_scores[mask]
-    cls_ids = scores[mask].argmax(axis=1)
-
-    if len(boxes_cxcywh) == 0:
-        return []
-
-    cx, cy, bw, bh = boxes_cxcywh[:, 0], boxes_cxcywh[:, 1], boxes_cxcywh[:, 2], boxes_cxcywh[:, 3]
-    x1 = (cx - bw / 2 - pad_x) / scale
-    y1 = (cy - bh / 2 - pad_y) / scale
-    x2 = (cx + bw / 2 - pad_x) / scale
-    y2 = (cy + bh / 2 - pad_y) / scale
-
-    x1 = np.clip(x1, 0, orig_w)
-    y1 = np.clip(y1, 0, orig_h)
-    x2 = np.clip(x2, 0, orig_w)
-    y2 = np.clip(y2, 0, orig_h)
-
-    boxes_xyxy = np.stack([x1, y1, x2, y2], axis=1)
-    keep = nms(boxes_xyxy, max_scores, iou_thresh)
-
-    results = []
-    for i in keep:
-        bx1, by1, bx2, by2 = boxes_xyxy[i]
-        w = bx2 - bx1
-        h = by2 - by1
-        if w > 1 and h > 1:
-            results.append({
-                "bbox": [round(float(bx1), 1), round(float(by1), 1),
-                         round(float(w), 1), round(float(h), 1)],
-                "category_id": int(cls_ids[i]),
-                "score": round(float(max_scores[i]), 3)
-            })
-    return results
-
-
-def image_id_from_filename(fname):
-    digits = ''.join(c for c in Path(fname).stem if c.isdigit())
-    return int(digits) if digits else 0
-
+def img_id(f):
+    d=''.join(c for c in Path(f).stem if c.isdigit())
+    return int(d) if d else 0
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
-    args = parser.parse_args()
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--input",required=True)
+    parser.add_argument("--output",required=True)
+    args=parser.parse_args()
+    inp=Path(args.input); out=Path(args.output); sd=Path(__file__).parent
+    prov=["CUDAExecutionProvider","CPUExecutionProvider"]
+    
+    # Load all models
+    models=[]
+    for name in ["model_a.onnx","model_b.onnx","model_c.onnx"]:
+        p=sd/name
+        if p.exists():
+            sess=ort.InferenceSession(str(p),providers=prov)
+            models.append((sess,sess.get_inputs()[0].name,sess.get_inputs()[0].shape[2]))
+    
+    files=sorted([f for f in inp.iterdir() if f.suffix.lower() in ('.jpg','.jpeg','.png')])
+    preds=[]
+    for fp in files:
+        iid=img_id(fp.name)
+        img=Image.open(str(fp)).convert("RGB")
+        ow,oh=img.size
+        all_b,all_s,all_c=[],[],[]
+        for sess,nm,imgsz in models:
+            arr,_,_,s,px,py=preprocess(img,imgsz)
+            if 'float16' in sess.get_inputs()[0].type:
+                arr=arr.astype(np.float16)
+            o=sess.run(None,{nm:arr})
+            b,sc,cl=decode(o[0],ow,oh,s,px,py)
+            if len(b)>0: all_b.append(b); all_s.append(sc); all_c.append(cl)
+        if not all_b: continue
+        ab=np.concatenate(all_b); asc=np.concatenate(all_s); ac=np.concatenate(all_c)
+        keep=nms(ab,asc,0.5)
+        for i in keep:
+            x1,y1,x2,y2=ab[i]; w=x2-x1; h=y2-y1
+            if w>1 and h>1:
+                preds.append({"image_id":iid,"category_id":int(ac[i]),"bbox":[round(float(x1),1),round(float(y1),1),round(float(w),1),round(float(h),1)],"score":round(float(asc[i]),3)})
+    out.parent.mkdir(parents=True,exist_ok=True)
+    with open(out,'w') as f: json.dump(preds,f)
+    print(f"Done: {len(files)} images, {len(preds)} detections, {len(models)} models")
 
-    input_dir = Path(args.input)
-    output_path = Path(args.output)
-    script_dir = Path(__file__).parent
-    model_path = script_dir / "best.onnx"
-
-    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    session = ort.InferenceSession(str(model_path), providers=providers)
-    input_name = session.get_inputs()[0].name
-
-    image_files = sorted(
-        [f for f in input_dir.iterdir() if f.suffix.lower() in ('.jpg', '.jpeg', '.png')]
-    )
-
-    all_predictions = []
-
-    print(f"Processing {len(image_files)} images with ONNX Runtime...")
-
-    for img_path in image_files:
-        img_id = image_id_from_filename(img_path.name)
-        tensor, orig_w, orig_h, scale, pad_x, pad_y = preprocess(img_path)
-        output = session.run(None, {input_name: tensor})
-        preds = postprocess(output[0], orig_w, orig_h, scale, pad_x, pad_y)
-
-        for p in preds:
-            p["image_id"] = img_id
-            all_predictions.append(p)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w') as f:
-        json.dump(all_predictions, f)
-
-    print(f"Done: {len(image_files)} images, {len(all_predictions)} detections")
-
-
-if __name__ == "__main__":
-    main()
+if __name__=="__main__": main()
