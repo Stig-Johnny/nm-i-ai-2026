@@ -358,12 +358,9 @@ def test_C03_project_invoice_tiago():
     actions = len(_re.findall(r'\b(?:opprett|create|registrer|registe|slett|delete|send|generer|generate|gere|faktura|fatura|invoice|rechnung|factura|betaling|payment|oppdater|update|reverser|reverse|kjør|run|konverter|convert|créez|erstellen|crea|envoyez|senden)\b', prompt_no_email))
     is_complex = len(prompt) > 200 or actions >= 2
     assert is_complex, f"Should be complex: {len(prompt)} chars, {actions} actions"
-    # Regex parse now returns create_invoice (fatura keyword) which delegates to project_invoice in handler
+    # Regex now correctly returns None (hours+fatura = complex → LLM)
     p = regex_parse(prompt)
-    assert p is not None
-    assert p["entities"].get("customerOrgNumber") == "889395338"
-    # create_invoice regex doesn't extract projectManagerEmail — that's OK,
-    # the handler will delegate to project_invoice which handles it via LLM entities
+    assert p is None, f"Should delegate to LLM, got {p['task_type'] if p else None}"
 
 
 # ============================================================
@@ -1416,6 +1413,95 @@ def test_C29_order_invoice_payment_not_register_payment():
     if plan:
         assert plan["task_type"] != "register_payment", f"Misclassified as register_payment! Got: {plan['task_type']}"
     # The key assertion is: no crash
+
+
+# ============================================================
+# MISCLASSIFICATION EDGE CASE TESTS — from 294 competition requests
+# ============================================================
+
+def test_M01_accounting_dimension_not_product():
+    """Accounting dimension with 'Produktlinje' must NOT be create_product."""
+    prompts = [
+        'Opprett ein fri rekneskapsdimensjon "Produktlinje" med verdiane "Basis" og "Avansert". Bokfør deretter eit bilag på konto 6340 for 15000 kr, knytt til dimensjonsverdien "Avansert".',
+        'Cree una dimensión contable personalizada "Produktlinje" con los valores "Avansert" y "Premium". Luego registre un asiento en la cuenta 7140 por 16800 NOK, vinculado al valor de dimensión "Premium".',
+        'Crie uma dimensão contabilística personalizada "Region" com os valores "Vestlandet" e "Midt-Norge". Em seguida, lance um documento na conta 6860 por 31050 NOK, vinculado ao valor de dimensão "Vestlandet".',
+        'Erstellen Sie eine benutzerdefinierte Buchhaltungsdimension "Prosjekttype" mit den Werten "Utvikling" und "Internt". Buchen Sie dann einen Beleg auf Konto 7000 für 39700 NOK, verknüpft mit dem Dimensionswert "Internt".',
+    ]
+    for p in prompts:
+        plan = regex_parse(p)
+        assert plan is None or plan["task_type"] != "create_product", f"'{p[:50]}' misclass as create_product"
+        assert plan is None or plan["task_type"] != "create_project", f"'{p[:50]}' misclass as create_project"
+
+
+def test_M02_german_payroll_not_invoice():
+    """German Gehaltsabrechnung (payroll) must NOT be create_invoice."""
+    plan = regex_parse('Führen Sie die Gehaltsabrechnung für Laura Schneider (laura.schneider@example.org) für diesen Monat durch. Das Grundgehalt beträgt 48 750 NOK. Fügen Sie einen einmaligen Bonus von 8 250 NOK hinzu.')
+    assert plan is None or plan["task_type"] != "create_invoice", f"Gehaltsabrechnung misclass as {plan['task_type'] if plan else None}"
+
+
+def test_M03_hours_invoice_goes_to_llm():
+    """Prompts with hours + invoice keywords must go to LLM (project_invoice)."""
+    prompts = [
+        'Log 5 hours for Emily Johnson (emily.johnson@example.org) on the activity "Utvikling" in the project "Security Audit" for Clearwater Ltd (org no. 874863807). Hourly rate: 950 NOK/h. Generate a project invoice to the customer based on the logged hours.',
+        'Erfassen Sie 25 Stunden für Anna Becker (anna.becker@example.org) auf der Aktivität "Beratung" im Projekt "Datenplattform" für Waldstein GmbH (Org.-Nr. 895873810). Stundensatz: 1100 NOK/Std. Erstellen Sie eine Projektrechnung.',
+        'Registe 35 horas para Inês Ferreira (ines.ferreira@example.org) na atividade "Testing" do projeto "Configuração cloud" para Floresta Lda (org. nº 949247589). Taxa horária: 1000 NOK/h. Gere uma fatura de projeto ao cliente com base nas horas registadas.',
+        'Enregistrez 12 heures pour Louis Petit (louis.petit@example.org) sur l\'activité "Analyse" du projet "Audit sécurité". Taux horaire : 850 NOK/h. Générez une facture projet.',
+    ]
+    for p in prompts:
+        plan = regex_parse(p)
+        assert plan is None, f"Hours+invoice should go to LLM, got {plan['task_type'] if plan else None} for: {p[:50]}"
+
+
+def test_M04_fixed_price_goes_to_llm():
+    """Fixed price project prompts must go to LLM."""
+    prompts = [
+        'Set a fixed price of 202150 NOK on the project "Cloud Migration" for Clearwater Ltd (org no. 872682023). The project manager is Oliver Brown (oliver.brown@example.org). Invoice the customer for 25% of the fixed price as a milestone payment.',
+        'Sett fastpris 363850 kr på prosjektet "Nettbutikk-utvikling" for Havbris AS (org.nr 916506112). Prosjektleder er Silje Hansen. Fakturer 50%.',
+        'Defina um preço fixo de 122800 NOK no projeto "Segurança de dados" para Luz do Sol Lda (org. nº 861443299). O gestor de projeto é Mariana Ferreira (mariana.ferreira@example.org). Fature ao cliente 75 %.',
+        'Establezca un precio fijo de 375250 NOK en el proyecto "Desarrollo e-commerce" para Estrella SL (org. nº 816896770).',
+    ]
+    for p in prompts:
+        plan = regex_parse(p)
+        assert plan is None, f"Fixed price should go to LLM, got {plan['task_type'] if plan else None} for: {p[:50]}"
+
+
+def test_M05_multi_product_invoice_goes_to_llm():
+    """Multi-product invoices (3+ lines) must go to LLM."""
+    prompts = [
+        'Crea una factura para el cliente Dorada SL (org. nº 884244307) con tres líneas de producto: Desarrollo (5012) a 17450 NOK, Mantenimiento (6481) a 9200 NOK, Almacenamiento (5675) a 3800 NOK.',
+        'Opprett ein faktura til kunden Bergvik AS (org.nr 807508474) med tre produktlinjer: Webdesign (6744) til 27000 kr, Programvarelisens (4531) til 8900 kr, Skylagring (8738) til 4100 kr.',
+    ]
+    for p in prompts:
+        plan = regex_parse(p)
+        assert plan is None, f"Multi-product invoice should go to LLM, got {plan['task_type'] if plan else None} for: {p[:50]}"
+
+
+def test_M06_project_lifecycle_goes_to_llm():
+    """Project lifecycle prompts must go to LLM."""
+    prompts = [
+        "Führen Sie den vollständigen Projektzyklus für 'Systemupgrade Brückentor' (Brückentor GmbH, Org.-Nr. 929610156) durch: 1) Das Projekt hat ein Budget von 300000 NOK.",
+        "Execute the complete project lifecycle for 'Cloud Migration Northwave' (Northwave Ltd, org no. 932075482): 1) The project has a budget of 396900 NOK.",
+    ]
+    for p in prompts:
+        plan = regex_parse(p)
+        assert plan is None, f"Lifecycle should go to LLM, got {plan['task_type'] if plan else None} for: {p[:50]}"
+
+
+def test_M07_simple_tasks_still_regex():
+    """Simple tasks must still be regex-parsed (not broken by new exclusions)."""
+    simple = [
+        ('Opprett produktet "Konsulenttimer" med produktnummer 7857. Prisen er 40100 kr eksklusiv MVA, og standard MVA-sats på 25 % skal nyttast.', 'create_product'),
+        ('Create the customer Windmill Ltd with organization number 884659876. The address is Storgata 45, 0182 Oslo. Email: post@windmill.no.', 'create_customer'),
+        ('Registrer leverandøren Havbris AS med organisasjonsnummer 840570169. E-post: faktura@havbris.no.', 'create_supplier'),
+        ('Créez trois départements dans Tripletex : "Økonomi", "Lager" et "IT".', 'create_department'),
+        ('Køyr løn for Arne Aasen (arne.aasen@example.org) for denne månaden. Grunnløn er 42450 kr.', 'run_payroll'),
+        ('The customer Windmill Ltd (org no. 830362894) has an outstanding invoice for 32200 NOK. Register full payment.', 'register_payment'),
+        ('Opprett og send en faktura til kunden Bergvik AS (org.nr 890733751) på 28900 kr ekskl. MVA. Fakturaen gjelder Konsulentbistand.', 'create_invoice'),
+    ]
+    for prompt, expected in simple:
+        plan = regex_parse(prompt)
+        assert plan is not None, f"Should regex-parse: {prompt[:50]}"
+        assert plan["task_type"] == expected, f"Expected {expected}, got {plan['task_type']} for: {prompt[:50]}"
 
 
 # ============================================================
