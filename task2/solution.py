@@ -201,18 +201,7 @@ def regex_parse(prompt):
             "entities": {"employeeName": emp_name, "employeeEmail": email, "title": title_match.group(1) if title_match else None, "expenses": expenses, "diet": diet},
         }
 
-    # === DEPARTMENT (check before customer — "departments" is specific) ===
-    if re.search(r'avdeling|department|abteilung|departamento|département', pl):
-        dept_names = re.findall(r'"([^"]+)"', p)
-        if len(dept_names) >= 2:
-            return {"task_type": "create_department", "entities": {"items": dept_names}}
-        elif dept_names:
-            return {"task_type": "create_department", "entities": {"name": dept_names[0]}}
-        else:
-            name_match = re.search(r'(?:navn|name|nombre|nom)\s+["\']?(\w[\w\s]*)', p)
-            return {"task_type": "create_department", "entities": {"name": name_match.group(1).strip() if name_match else "Department"}}
-
-    # === COMPLEX TASKS — always delegate to LLM ===
+    # === COMPLEX TASKS — always delegate to LLM (check BEFORE department/product/project) ===
     # These tasks mention keywords that regex might misclassify (e.g. "faktura" in reminder, "betaling" in bank reconciliation)
     complex_patterns = [
         r'purregebyr|purring|rappel|mahngebühr|reminder.*fee|frais de rappel|forfalt|forfallen|overdue|retard|en retard|vencida',  # reminder fee
@@ -232,10 +221,22 @@ def regex_parse(prompt):
         r'projektzyklus|project.*lifecycle|ciclo.*proyecto|cycle.*projet|ciclo.*projeto',  # project lifecycle (additional patterns)
         r'(?:tre|drei|three|tres|três)\s+.{0,30}(?:produkt|producto|produit|produto|product)',  # multi-line invoice with 3 products
         r'fastpris|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo',  # fixed price project
+        r'kvittering|quittung|recibo(?!.*leverandør)|(?:despesa|gasto)\s+de\s+\w+\s+(?:deste|de\s+este)',  # receipt expense (always has files)
     ]
     for pat in complex_patterns:
         if re.search(pat, pl):
             return None  # Delegate to LLM
+
+    # === DEPARTMENT (check after complex patterns — "avdeling" appears in receipts too) ===
+    if re.search(r'avdeling|department|abteilung|departamento|département', pl):
+        dept_names = re.findall(r'"([^"]+)"', p)
+        if len(dept_names) >= 2:
+            return {"task_type": "create_department", "entities": {"items": dept_names}}
+        elif dept_names:
+            return {"task_type": "create_department", "entities": {"name": dept_names[0]}}
+        else:
+            name_match = re.search(r'(?:navn|name|nombre|nom)\s+["\']?(\w[\w\s]*)', p)
+            return {"task_type": "create_department", "entities": {"name": name_match.group(1).strip() if name_match else "Department"}}
 
     # === PAYMENT (check before invoice — payment prompts also mention "invoice"/"faktura") ===
     if re.search(r'betaling|payment|zahlung|pago|paiement|pagamento', pl):
@@ -3385,7 +3386,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0100"
+BUILD_VERSION = "v20260322-0115"
 
 @app.get("/health")
 def health():
