@@ -2339,21 +2339,22 @@ def handle_project_invoice(base_url, token, e):
         st_ts, ts_resp = tx_post(base_url, token, "/timesheet/entry", ts_body)
         print(f"timesheet entry: {st_ts} {str(ts_resp)[:200]}")
 
-    # Step 5b: Add project participants (PM + any timesheet employees)
-    if proj_id:
-        participant_ids = set()
-        if emp_id:
-            participant_ids.add(emp_id)
-        for p_id in participant_ids:
-            try:
-                st_pp, resp_pp = tx_post(base_url, token, "/project/participant", {
-                    "project": {"id": proj_id},
-                    "employee": {"id": p_id},
-                    "adminAccess": False,
-                })
-                print(f"project participant {p_id}: {st_pp} {str(resp_pp)[:500]}")
-            except Exception as e_pp:
-                print(f"project participant error: {e_pp}")
+    # Step 5b: Add project participants (non-PM employees from timesheet)
+    # PM is auto-added as participant when set as projectManager — skip them
+    if proj_id and hours_logged:
+        for hl in hours_logged:
+            hl_email = hl.get("employeeEmail")
+            hl_emp_id = get_or_create_employee(base_url, token, name=hl.get("employeeName"), email=hl_email) if hl_email else None
+            if hl_emp_id and hl_emp_id != emp_id:  # Skip PM (already participant)
+                try:
+                    st_pp, _ = tx_post(base_url, token, "/project/participant", {
+                        "project": {"id": proj_id},
+                        "employee": {"id": hl_emp_id},
+                        "adminAccess": False,
+                    })
+                    print(f"project participant {hl_emp_id}: {st_pp}")
+                except Exception:
+                    pass
 
     # Step 6: Set hourly cost/rate on employee for the project
     if emp_id and hourly_rate > 0:
@@ -2409,6 +2410,7 @@ def handle_project_invoice(base_url, token, e):
                 "unitPriceExcludingVatCurrency": fixed_price,
                 "count": 1,
                 "date": today,
+                "isChargeable": True,
             }
             st_ol, resp_ol = tx_post(base_url, token, "/project/orderline", ol_body)
             print(f"project order line: {st_ol} amount={fixed_price} {str(resp_ol)[:500]}")
