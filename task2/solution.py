@@ -1514,38 +1514,38 @@ def handle_register_supplier_invoice(base_url, token, e):
     inv_date = e.get("invoiceDate") or today
     inv_due = e.get("invoiceDueDate") or str(date.today() + timedelta(days=30))
 
-    # Try 1: Minimal SI without voucher (proxy may reject inline vouchers)
-    si_minimal = {
+    # Try 1: SI with inline voucher (NO amountCurrency — causes 500 in proxy)
+    si_body = {
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
         "invoiceNumber": e.get("invoiceNumber") or "",
-        "amountCurrency": round(total_incl, 2),
         "supplier": {"id": supplier_id} if supplier_id else None,
+        "voucher": {
+            "date": inv_date,
+            "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
+            "postings": si_postings,
+        },
     }
-    if si_minimal.get("supplier") is None:
-        si_minimal.pop("supplier", None)
+    if si_body.get("supplier") is None:
+        si_body.pop("supplier", None)
 
-    st, resp = tx_post(base_url, token, "/supplierInvoice", si_minimal)
-    print(f"supplierInvoice (minimal): {st} {str(resp)[:300]}")
-
-    if st in (200, 201):
-        val = resp.get("value", {})
-        print(f"  amount={val.get('amount')} amountCurrency={val.get('amountCurrency')} id={val.get('id')}")
-        return True
-
-    # Try 2: With inline voucher
-    si_minimal["voucher"] = {
-        "date": inv_date,
-        "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
-        "postings": si_postings,
-    }
-    st, resp = tx_post(base_url, token, "/supplierInvoice", si_minimal)
+    st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
     print(f"supplierInvoice (with voucher): {st} {str(resp)[:300]}")
 
     if st in (200, 201):
+        val = resp.get("value", {})
+        print(f"  SI created: id={val.get('id')}")
         return True
 
-    # Fallback: raw voucher only if supplierInvoice failed
+    # Try 2: Without inline voucher (bare SI)
+    si_body.pop("voucher", None)
+    st, resp = tx_post(base_url, token, "/supplierInvoice", si_body)
+    print(f"supplierInvoice (minimal): {st} {str(resp)[:300]}")
+
+    if st in (200, 201):
+        return True
+
+    # Fallback: raw voucher (always works but scorer may not recognize as SI)
     print("supplierInvoice failed, trying raw voucher")
     voucher_body = {
         "date": inv_date,
@@ -3386,7 +3386,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0115"
+BUILD_VERSION = "v20260322-0130"
 
 @app.get("/health")
 def health():

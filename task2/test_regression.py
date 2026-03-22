@@ -1321,8 +1321,8 @@ def test_C24_nynorsk_supplier_invoice():
     assert e["accountNumber"] == 7140
 
 
-def test_C25_supplier_invoice_has_currency():
-    """Supplier invoice POST body should include currency field."""
+def test_C25_supplier_invoice_no_amountCurrency():
+    """Supplier invoice POST must NOT include amountCurrency (causes 500 in proxy)."""
     from task2.solution import handle_register_supplier_invoice, normalize_entities
     mock = APIMock()
     entities = normalize_entities({
@@ -1337,7 +1337,11 @@ def test_C25_supplier_invoice_has_currency():
     si = posts(mock, "/supplierInvoice")
     assert len(si) >= 1, "Should attempt SI POST"
     body = si[0][2]
+    assert "amountCurrency" not in body, "amountCurrency causes 500 in proxy — must not be in body"
     assert "voucherDate" not in body, "voucherDate is invalid — proxy rejects it"
+    # Should have inline voucher with postings
+    assert "voucher" in body, "First attempt should include inline voucher with postings"
+    assert len(body["voucher"]["postings"]) >= 2, "Voucher should have at least 2 postings"
 
 
 def test_C26_receipt_expense_department():
