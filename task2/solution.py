@@ -37,17 +37,23 @@ LOG_DIR.mkdir(exist_ok=True)
 # Tripletex API helpers
 # ============================================================
 
+def _safe_json(r):
+    try:
+        return r.json() if r.content else {}
+    except Exception:
+        return {}
+
 def tx_get(base_url, token, path, params=None):
     r = requests.get(f"{base_url}{path}", auth=("0", token), params=params or {}, timeout=30)
-    return r.status_code, r.json() if r.content else {}
+    return r.status_code, _safe_json(r)
 
 def tx_post(base_url, token, path, body):
     r = requests.post(f"{base_url}{path}", auth=("0", token), json=body, timeout=30)
-    return r.status_code, r.json() if r.content else {}
+    return r.status_code, _safe_json(r)
 
 def tx_put(base_url, token, path, body=None, params=None):
     r = requests.put(f"{base_url}{path}", auth=("0", token), json=body or {}, params=params or {}, timeout=30)
-    return r.status_code, r.json() if r.content else {}
+    return r.status_code, _safe_json(r)
 
 def tx_delete(base_url, token, path):
     r = requests.delete(f"{base_url}{path}", auth=("0", token), timeout=30)
@@ -157,11 +163,11 @@ def regex_parse(prompt):
         return None
 
     def find_address(t):
-        m = re.search(r"(?:adress[ea]|address|Adresse|L'adresse)\s+(?:ist|er|is|es|est|:)?\s+(.+?)(?:\.|$)", t, re.I)
+        m = re.search(r"(?:adress[ea]n?|address|Adresse[n]?|L'adresse|dirección|endereço|morada)\s+(?:ist|er|is|es|est|é|:)?\s+(.+?)(?:\.|$)", t, re.I)
         if not m: return None
         addr_str = m.group(1)
         # Try "Street, PostalCode City" pattern
-        am = re.match(r'(.+?),?\s+(\d{4,5})\s+(\w+)', addr_str)
+        am = re.match(r'(.+?),?\s+(\d{4,5})\s+([\w\u00C0-\u024F]+)', addr_str)
         if am:
             return {"addressLine1": am.group(1).strip(), "postalCode": am.group(2), "city": am.group(3)}
         return {"addressLine1": addr_str.strip()}
@@ -219,6 +225,13 @@ def regex_parse(prompt):
         r'valutadifferanse|exchange.*rate.*differ|wechselkurs|tipo.*cambio|taux.*change|taxa.*câmbio|agio|disagio',  # currency payment
         r'konverter.*faktura.*betaling|convert.*invoice.*payment|wandeln.*rechnung.*zahlung|convertir.*factura.*pago|convertir.*facture.*paiement',  # order→invoice→payment
         r'ordre.*faktura.*betaling|order.*invoice.*payment|auftrag.*rechnung.*zahlung|orden.*factura.*pago|commande.*facture.*paiement',  # order→invoice→payment
+        r'gehaltsabrechnung',  # German payroll (contains "Rechnung" = invoice)
+        r'dimensjon|dimensão|dimensión|dimension.*(?:verdiane|valores|valores|values|werte)',  # accounting dimension
+        r'(?:hours?|stund(?:en)?|timer?|horas?|timar?|heures?)\s.*(?:faktura|invoice|rechnung|factura|fatura|facture)',  # hours + invoice = project_invoice
+        r'(?:faktura|invoice|rechnung|factura|fatura|facture).*(?:hours?|stund(?:en)?|timer?|horas?|timar?|heures?)',  # invoice + hours = project_invoice
+        r'projektzyklus|project.*lifecycle|ciclo.*proyecto|cycle.*projet|ciclo.*projeto',  # project lifecycle (additional patterns)
+        r'(?:tre|drei|three|tres|três)\s+.{0,30}(?:produkt|producto|produit|produto|product)',  # multi-line invoice with 3 products
+        r'fastpris|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo',  # fixed price project
     ]
     for pat in complex_patterns:
         if re.search(pat, pl):
@@ -3372,7 +3385,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0030"
+BUILD_VERSION = "v20260322-0100"
 
 @app.get("/health")
 def health():
