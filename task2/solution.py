@@ -61,19 +61,19 @@ def _safe_json(r):
         return {}
 
 def tx_get(base_url, token, path, params=None):
-    r = requests.get(f"{base_url}{path}", auth=("0", token), params=params or {}, timeout=30)
+    r = requests.get(f"{base_url}{path}", auth=("0", token), params=params or {}, timeout=15)
     return r.status_code, _safe_json(r)
 
 def tx_post(base_url, token, path, body):
-    r = requests.post(f"{base_url}{path}", auth=("0", token), json=body, timeout=30)
+    r = requests.post(f"{base_url}{path}", auth=("0", token), json=body, timeout=15)
     return r.status_code, _safe_json(r)
 
 def tx_put(base_url, token, path, body=None, params=None):
-    r = requests.put(f"{base_url}{path}", auth=("0", token), json=body or {}, params=params or {}, timeout=30)
+    r = requests.put(f"{base_url}{path}", auth=("0", token), json=body or {}, params=params or {}, timeout=15)
     return r.status_code, _safe_json(r)
 
 def tx_delete(base_url, token, path):
-    r = requests.delete(f"{base_url}{path}", auth=("0", token), timeout=30)
+    r = requests.delete(f"{base_url}{path}", auth=("0", token), timeout=15)
     return r.status_code, {}
 
 # ============================================================
@@ -440,7 +440,7 @@ def parse_with_claude(prompt, file_texts, raw_files=None):
         except Exception:
             pass
 
-    # Check if we have PDF/image files that need vision — use Anthropic SDK
+    # Use SDK for visual files (has API key from env), CLI for text-only
     has_visual_files = raw_files and any(
         f.get("_rendered_image_b64") or f.get("mime_type", "").startswith("image/")
         for f in raw_files
@@ -484,15 +484,15 @@ def parse_with_claude(prompt, file_texts, raw_files=None):
         return None
 
 
-def _parse_with_sdk(prompt, raw_files):
-    """Parse using Anthropic SDK with PDF/image document support."""
+def _parse_with_sdk(prompt, raw_files=None):
+    """Parse using Anthropic SDK — faster than CLI (no subprocess overhead)."""
     try:
         import anthropic
         client = anthropic.Anthropic()
 
         # Build content blocks: text prompt + document/image blocks
         content = []
-        for f in raw_files:
+        for f in (raw_files or []):
             mime = f.get("mime_type", "")
             fname = f.get("filename", "file")
             # Use rendered image from scanned PDF if available
@@ -3615,7 +3615,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0940"
+BUILD_VERSION = "v20260322-0945"
 
 @app.get("/health")
 def health():
