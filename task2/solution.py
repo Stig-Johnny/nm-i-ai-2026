@@ -225,7 +225,7 @@ def regex_parse(prompt):
         r'avstem|reconcil|abstimm|concili|rapprocher|bankutskrift|bank\s*statement|extrato\s*banc',  # bank reconciliation
         r'reverser|reverse|stornieren|annuler|anular|reverter|devolvido|retourné|returned.*bank',  # reverse voucher
         r'feil i hovedbok|feil i hovudboka|errors? in.*ledger|fehler.*hauptbuch|errores.*libro.*mayor|erreurs.*grand.*livre|erros.*livro',  # ledger correction
-        r'årsoppgjør|year.end.*closing|jahresabschluss|monatsabschluss|cierre.*anual|clôture.*annuel|encerramento.*anual|månedsslutt|månedsavslut|månavslutn|month.end.*closing|clôture.*mensuel|cierre.*mensual|encerramento.*mensal|rechnungsabgr',  # year-end/month-end
+        r'årsoppgjør|year.end.*closing|jahresabschluss|monatsabschluss|cierre.*anual|clôture.*annuel|encerramento.*anual|måned.*avsl|månads|månavsl|month.end.*closing|clôture.*mensuel|cierre.*mensual|encerramento.*mensal|rechnungsabgr',  # year-end/month-end
         r'analysier|analyser.*hovudboka|analyse.*hauptbuch|analyze.*ledger|analise.*livro|trois.*comptes|three.*accounts|drei.*konten|kostnadskontoane|expense.*accounts',  # ledger analysis
         r'livssyklus|lifecycle|lebenszyklus|ciclo.*vida|cycle.*vie',  # project lifecycle
         r'valutadifferanse|exchange.*rate.*differ|wechselkurs|tipo.*cambio|taux.*change|taxa.*câmbio|agio|disagio',  # currency payment
@@ -2259,12 +2259,12 @@ def handle_project_invoice(base_url, token, e):
     # Step 3b: Add project participant (PM/employee)
     if proj_id and emp_id:
         try:
-            st_pp, _ = tx_post(base_url, token, "/project/participant", {
+            st_pp, resp_pp = tx_post(base_url, token, "/project/participant", {
                 "project": {"id": proj_id},
                 "employee": {"id": emp_id},
                 "adminAccess": True,
             })
-            print(f"project participant: {st_pp}")
+            print(f"project participant: {st_pp} {str(resp_pp)[:200] if st_pp != 201 else ''}")
         except Exception:
             pass
 
@@ -2387,6 +2387,7 @@ def handle_project_invoice(base_url, token, e):
                 "description": proj_name,
                 "unitPriceExcludingVatCurrency": fixed_price,
                 "count": 1,
+                "date": today,
             }
             st_ol, resp_ol = tx_post(base_url, token, "/project/orderline", ol_body)
             print(f"project order line: {st_ol} amount={fixed_price} {str(resp_ol)[:200] if st_ol != 201 else ''}")
@@ -3597,7 +3598,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0905"
+BUILD_VERSION = "v20260322-0910"
 
 @app.get("/health")
 def health():
