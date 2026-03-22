@@ -1141,6 +1141,8 @@ def test_C11_project_invoice_fixed_price_order_has_project():
     # Project order line should be created for fixed-price projects
     ol_posts = posts(mock, "/project/orderline")
     assert len(ol_posts) >= 1, "Fixed-price project should create project order line"
+    # Order line must have date field (proxy 422 without it)
+    assert ol_posts[0][2].get("date") is not None, "Project orderline must have date field"
 
 
 def test_C12_regex_whitelist_register_payment():
