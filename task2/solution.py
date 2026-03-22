@@ -1136,6 +1136,7 @@ def handle_create_travel_expense(base_url, token, e):
             "purpose": title,
             "isForeignTravel": False,
             "isDayTrip": travel_days <= 1,
+            "isCompensationFromRates": True,
         },
     }
     st, resp = tx_post(base_url, token, "/travelExpense", te_body)
@@ -1223,6 +1224,10 @@ def handle_create_travel_expense(base_url, token, e):
             }
             if rate_type_id:
                 pd_body["rateType"] = {"id": rate_type_id}
+                # Set rate and amount explicitly from rate type
+                if rate_types and rate_types[0].get("rate"):
+                    pd_body["rate"] = float(rate_types[0]["rate"])
+                    pd_body["amount"] = float(rate_types[0]["rate"]) * diet_days
             st_pd, resp_pd = tx_post(base_url, token, "/travelExpense/perDiemCompensation", pd_body)
             print(f"  perDiemCompensation: {st_pd} {str(resp_pd)[:500]}")
             if st_pd not in (200, 201):
@@ -1239,8 +1244,7 @@ def handle_create_travel_expense(base_url, token, e):
                         "date": e.get("date", today),
                         "amountCurrencyIncVat": float(diet_total),
                     }
-                    if pt_id:
-                        cost_body["paymentType"] = {"id": pt_id}
+                    cost_body["paymentType"] = {"id": pt_id}
                     st_c, _ = tx_post(base_url, token, "/travelExpense/cost", cost_body)
                     print(f"  cost 'diett' {diet_total}: {st_c}")
 
@@ -1279,8 +1283,7 @@ def handle_create_travel_expense(base_url, token, e):
             "date": e.get("date", today),
             "amountCurrencyIncVat": amt,
         }
-        if pt_id:
-            cost_body["paymentType"] = {"id": pt_id}
+        cost_body["paymentType"] = {"id": pt_id}
         st_c, cr = tx_post(base_url, token, "/travelExpense/cost", cost_body)
         print(f"  cost '{desc}' {amt}: {st_c}")
 
@@ -2173,6 +2176,7 @@ def handle_project_invoice(base_url, token, e):
     proj_body = {
         "name": proj_name,
         "startDate": today,
+        "endDate": e.get("endDate") or str(date.today() + timedelta(days=90)),
     }
     if customer_id:
         proj_body["customer"] = {"id": customer_id}
@@ -2192,6 +2196,18 @@ def handle_project_invoice(base_url, token, e):
     st, proj_resp = tx_post(base_url, token, "/project", proj_body)
     proj_id = proj_resp.get("value", {}).get("id")
     print(f"create project: {st} id={proj_id} {str(proj_resp)[:200] if st != 201 else ''}")
+
+    # Step 3b: Add project participant (PM/employee)
+    if proj_id and emp_id:
+        try:
+            st_pp, _ = tx_post(base_url, token, "/project/participant", {
+                "project": {"id": proj_id},
+                "employee": {"id": emp_id},
+                "adminAccess": True,
+            })
+            print(f"project participant: {st_pp}")
+        except Exception:
+            pass
 
     # Step 4: Find or create activity
     activity_name = e.get("activityName") or e.get("activity") or e.get("description") or "Arbeid"
@@ -2310,12 +2326,26 @@ def handle_project_invoice(base_url, token, e):
             ol_body = {
                 "project": {"id": proj_id},
                 "description": proj_name,
-                "amountOrderLinesCurrency": fixed_price,
+                "unitPriceExcludingVatCurrency": fixed_price,
+                "count": 1,
             }
             st_ol, resp_ol = tx_post(base_url, token, "/project/orderline", ol_body)
             print(f"project order line: {st_ol} amount={fixed_price} {str(resp_ol)[:200] if st_ol != 201 else ''}")
         except Exception as e_ol:
             print(f"project order line error: {e_ol}")
+
+    # Step 6d: Set project ready for invoicing
+    if proj_id:
+        try:
+            # Get current version first
+            _, proj_cur = tx_get(base_url, token, f"/project/{proj_id}", {"fields": "id,version"})
+            proj_ver = proj_cur.get("value", {}).get("version", 0)
+            tx_put(base_url, token, f"/project/{proj_id}", {
+                "id": proj_id, "version": proj_ver,
+                "name": proj_name, "isReadyForInvoicing": True,
+            })
+        except Exception:
+            pass
 
     # Step 7: Create invoice
     ensure_bank_account(base_url, token)
@@ -2759,7 +2789,10 @@ def handle_year_end_closing(base_url, token, e):
 
     # 2. Prepaid expense reversal
     prepaid_amount = float(e.get("prepaidAmount") or 0)
-    prepaid_acct_num = int(e.get("prepaidAccount") or 1700)
+    try:
+        prepaid_acct_num = int(e.get("prepaidAccount") or 1700)
+    except (ValueError, TypeError):
+        prepaid_acct_num = 1700
     if prepaid_amount:
         prepaid_acct = find_account_id(base_url, token, prepaid_acct_num)
         prepaid_expense_num = int(e.get("prepaidExpenseAccount") or e.get("expenseAccount") or 6540)
@@ -2783,8 +2816,14 @@ def handle_year_end_closing(base_url, token, e):
     accrual = e.get("accrualReversal")
     if accrual:
         acr_amount = float(accrual.get("amount") or 0)
-        acr_acct_num = int(accrual.get("account") or 1720)
-        acr_expense_num = int(accrual.get("expenseAccount") or 6540)
+        try:
+            acr_acct_num = int(accrual.get("account") or 1720)
+        except (ValueError, TypeError):
+            acr_acct_num = 1720
+        try:
+            acr_expense_num = int(accrual.get("expenseAccount") or 6540)
+        except (ValueError, TypeError):
+            acr_expense_num = 6540
         if acr_amount:
             acr_acct = find_account_id(base_url, token, acr_acct_num)
             acr_expense = find_account_id(base_url, token, acr_expense_num)
@@ -2807,8 +2846,14 @@ def handle_year_end_closing(base_url, token, e):
     salary_accrual = e.get("salaryAccrual") or e.get("salaryProvision")
     if salary_accrual:
         sal_amount = float(salary_accrual.get("amount") or e.get("salaryAccrualAmount") or 0)
-        sal_expense_num = int(salary_accrual.get("expenseAccount") or 5000)
-        sal_accrual_num = int(salary_accrual.get("accrualAccount") or salary_accrual.get("payableAccount") or 2900)
+        try:
+            sal_expense_num = int(salary_accrual.get("expenseAccount") or 5000)
+        except (ValueError, TypeError):
+            sal_expense_num = 5000
+        try:
+            sal_accrual_num = int(salary_accrual.get("accrualAccount") or salary_accrual.get("payableAccount") or 2900)
+        except (ValueError, TypeError):
+            sal_accrual_num = 2900
         if sal_amount:
             sal_expense = find_account_id(base_url, token, sal_expense_num)
             sal_accrual_acct = find_account_id(base_url, token, sal_accrual_num)
@@ -2865,8 +2910,14 @@ def handle_year_end_closing(base_url, token, e):
 
     # 3. Tax provision
     tax_rate = float(e.get("taxRate") or 22) / 100
-    tax_acct_num = int(e.get("taxAccount") or 8700)
-    tax_payable_num = int(e.get("taxPayableAccount") or 2920)
+    try:
+        tax_acct_num = int(e.get("taxAccount") or 8700)
+    except (ValueError, TypeError):
+        tax_acct_num = 8700
+    try:
+        tax_payable_num = int(e.get("taxPayableAccount") or 2920)
+    except (ValueError, TypeError):
+        tax_payable_num = 2920
 
     # Get taxable result from ledger (sum of income - expenses)
     # For now, use the result from the prompt if given, otherwise estimate
@@ -3447,7 +3498,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0800"
+BUILD_VERSION = "v20260322-0820"
 
 @app.get("/health")
 def health():
