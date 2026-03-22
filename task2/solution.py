@@ -203,7 +203,7 @@ def regex_parse(prompt):
         return parts[0], " ".join(parts[1:]) if len(parts) > 1 else ""
 
     # === TRAVEL EXPENSE (check before customer/supplier — "reiseregning" is specific) ===
-    if re.search(r'reiseregning|travel\s*expense|reisekost|gastos\s+de\s+viaje|note\s+de\s+frais', pl):
+    if re.search(r'reiseregning|travel\s*expense|reisekost|gastos\s+de\s+viaje|note\s+de\s+frais|despesa\s+de\s+viagem|visite\s+client', pl):
         if re.search(r'slett|delete|löschen|eliminar|supprimer', pl):
             return {"task_type": "delete_travel_expense", "entities": {}}
         emp_name = find_name_after(p, 'for', 'für', 'para', 'pour')
@@ -227,31 +227,148 @@ def regex_parse(prompt):
             "entities": {"employeeName": emp_name, "employeeEmail": email, "title": title_match.group(1) if title_match else None, "expenses": expenses, "diet": diet},
         }
 
-    # === COMPLEX TASKS — always delegate to LLM (check BEFORE department/product/project) ===
-    # These tasks mention keywords that regex might misclassify (e.g. "faktura" in reminder, "betaling" in bank reconciliation)
-    complex_patterns = [
-        r'purregebyr|purring|rappel|mahngebühr|reminder.*fee|frais de rappel|forfalt|forfallen|overdue|retard|en retard|vencida',  # reminder fee
-        r'avstem|reconcil|abstimm|concili|rapprocher|bankutskrift|bank\s*statement|extrato\s*banc',  # bank reconciliation
-        r'reverser|reverse|stornieren|annuler|anular|reverter|devolvido|retourné|returned.*bank',  # reverse voucher
-        r'feil i hovedbok|feil i hovudboka|errors? in.*ledger|fehler.*hauptbuch|errores.*libro.*mayor|erreurs.*grand.*livre|erros.*livro',  # ledger correction
-        r'årsoppgjør|year.end.*closing|jahresabschluss|monatsabschluss|cierre.*anual|clôture.*annuel|encerramento.*anual|måned.*avsl|månads|månavsl|month.end.*closing|clôture.*mensuel|cierre.*mensual|encerramento.*mensal|rechnungsabgr',  # year-end/month-end
-        r'analysier|analyser.*hovudboka|analyse.*hauptbuch|analyze.*ledger|analise.*livro|trois.*comptes|three.*accounts|drei.*konten|kostnadskontoane|expense.*accounts',  # ledger analysis
-        r'livssyklus|lifecycle|lebenszyklus|ciclo.*vida|cycle.*vie',  # project lifecycle
-        r'valutadifferanse|exchange.*rate.*differ|wechselkurs|tipo.*cambio|taux.*change|taxa.*câmbio|agio|disagio',  # currency payment
-        r'konverter.*faktura.*betaling|convert.*invoice.*payment|wandeln.*rechnung.*zahlung|convertir.*factura.*pago|convertir.*facture.*paiement',  # order→invoice→payment
-        r'ordre.*faktura.*betaling|order.*invoice.*payment|auftrag.*rechnung.*zahlung|orden.*factura.*pago|commande.*facture.*paiement',  # order→invoice→payment
-        r'gehaltsabrechnung',  # German payroll (contains "Rechnung" = invoice)
-        r'dimensjon|dimensão|dimensión|dimension.*(?:verdiane|valores|valores|values|werte)',  # accounting dimension
-        r'(?:hours?|stund(?:en)?|timer?|horas?|timar?|heures?)\s.*(?:faktura|invoice|rechnung|factura|fatura|facture)',  # hours + invoice = project_invoice
-        r'(?:faktura|invoice|rechnung|factura|fatura|facture).*(?:hours?|stund(?:en)?|timer?|horas?|timar?|heures?)',  # invoice + hours = project_invoice
-        r'projektzyklus|prosjektsyklus|project.*lifecycle|ciclo.*proyecto|cycle.*projet|ciclo.*projeto',  # project lifecycle (additional patterns)
-        r'(?:tre|drei|three|tres|três)\s+.{0,30}(?:produkt|producto|produit|produto|product)',  # multi-line invoice with 3 products
-        r'fastpris|festpreis|fixed\s*price|precio\s+fijo|prix\s+fixe|preço\s+fixo',  # fixed price project
-        r'kvittering|quittung|recibo(?!.*leverandør)|(?:despesa|gasto)\s+de\s+\w+\s+(?:deste|de\s+este)',  # receipt expense (always has files)
-    ]
-    for pat in complex_patterns:
-        if re.search(pat, pl):
-            return None  # Delegate to LLM
+    # === COMPLEX TASKS — always delegate to LLM ===
+    # Translation table: keywords per task type in all 7 languages
+    # nb=Bokmål, nn=Nynorsk, en=English, de=German, es=Spanish, fr=French, pt=Portuguese
+    COMPLEX_KEYWORDS = {
+        "reminder_fee": [
+            "purregebyr", "purring", "forfalt", "forfallen",  # nb/nn
+            "reminder fee", "overdue",  # en
+            "mahngebühr",  # de
+            "rappel", "vencida", "vencido",  # es
+            "frais de rappel", "en retard",  # fr
+            "taxa de lembrete", "taxa de atraso",  # pt
+        ],
+        "bank_reconciliation": [
+            "avstem", "bankutskrift",  # nb/nn
+            "reconcil", "bank statement",  # en
+            "abstimm",  # de
+            "concili",  # es
+            "rapprocher", "relevé bancaire",  # fr
+            "extrato banc", "reconciliação",  # pt
+        ],
+        "reverse_voucher": [
+            "reverser", "returnert",  # nb/nn
+            "reverse", "returned bank",  # en
+            "stornieren",  # de
+            "anular",  # es
+            "annuler", "retourné",  # fr
+            "reverter", "devolvido", "estorno",  # pt
+        ],
+        "ledger_correction": [
+            "feil i hovedbok", "feil i hovudboka",  # nb/nn
+            "errors in ledger", "error in ledger",  # en
+            "fehler hauptbuch",  # de — partial match OK
+            "errores libro mayor",  # es
+            "erreurs grand livre",  # fr
+            "erros livro",  # pt
+        ],
+        "year_end_month_end": [
+            "årsoppgjør", "måned.*avsl", "månads", "månavsl",  # nb/nn
+            "year.end.*closing", "month.end.*closing",  # en
+            "jahresabschluss", "monatsabschluss", "rechnungsabgr",  # de
+            "cierre anual", "cierre mensual",  # es
+            "clôture annuel", "clôture mensuel",  # fr
+            "encerramento anual", "encerramento mensal",  # pt
+        ],
+        "ledger_analysis": [
+            "analysier", "analyser hovudboka", "kostnadskontoane",  # nb/nn
+            "analyze ledger", "three accounts", "expense accounts",  # en
+            "analyse hauptbuch", "drei konten",  # de
+            "analizar libro mayor", "tres cuentas",  # es
+            "trois comptes", "analyser grand livre",  # fr
+            "analise livro", "três contas",  # pt
+        ],
+        "project_lifecycle": [
+            "livssyklus", "prosjektsyklus",  # nb/nn
+            "lifecycle", "project lifecycle",  # en
+            "lebenszyklus", "projektzyklus",  # de
+            "ciclo de vida", "ciclo vida",  # es
+            "cycle de vie", "cycle vie",  # fr
+            "ciclo de vida", "ciclo projeto",  # pt
+        ],
+        "currency_payment": [
+            "valutadifferanse", "agio", "disagio",  # nb/nn
+            "exchange rate", "currency differ",  # en
+            "wechselkurs",  # de
+            "tipo de cambio", "tipo cambio",  # es
+            "taux de change", "taux change",  # fr
+            "taxa de câmbio", "taxa câmbio", "diferença cambial",  # pt
+        ],
+        "order_invoice_payment": [
+            "konverter.*faktura.*betaling", "ordre.*faktura.*betaling",  # nb/nn
+            "convert.*invoice.*payment", "order.*invoice.*payment",  # en
+            "wandeln.*rechnung.*zahlung", "auftrag.*rechnung.*zahlung",  # de
+            "convertir.*factura.*pago", "orden.*factura.*pago",  # es
+            "convertir.*facture.*paiement", "commande.*facture.*paiement",  # fr
+            "converter.*fatura.*pagamento", "pedido.*fatura.*pagamento",  # pt
+        ],
+        "german_payroll": [
+            "gehaltsabrechnung",  # de only
+        ],
+        "travel_expense_keywords": [
+            "despesa de viagem", "kundebesøk",  # nb/nn/pt
+            "customer visit", "client visit",  # en
+            "kundenbesuch", "reisekostenabrechnung",  # de
+            "visita del cliente", "gastos de viaje",  # es
+            "visite client", "note de frais",  # fr
+            "visita cliente",  # pt
+        ],
+        "accounting_dimension": [
+            "dimensjon",  # nb/nn
+            "dimension values", "accounting dimension",  # en
+            "buchhaltungsdimension", "dimension werte",  # de
+            "dimensión", "dimensión contable",  # es
+            "dimension comptable",  # fr
+            "dimensão", "dimensão contabilística",  # pt
+        ],
+        "hours_plus_invoice": [
+            "timer.*faktura", "timer.*invoice",  # nb
+            "timar.*faktura",  # nn
+            "hours.*invoice", "invoice.*hours",  # en
+            "stunden.*rechnung", "rechnung.*stunden",  # de
+            "horas.*factura", "factura.*horas",  # es
+            "heures.*facture", "facture.*heures",  # fr
+            "horas.*fatura", "fatura.*horas",  # pt
+        ],
+        "multi_product_invoice": [
+            "tre produkt",  # nb/nn
+            "three product",  # en
+            "drei produkt",  # de
+            "tres producto", "tres líneas",  # es
+            "trois produit", "trois lignes",  # fr
+            "três produto", "três linhas",  # pt
+        ],
+        "fixed_price_project": [
+            "fastpris",  # nb/nn
+            "fixed price",  # en
+            "festpreis",  # de
+            "precio fijo",  # es
+            "prix fixe",  # fr
+            "preço fixo",  # pt
+        ],
+        "receipt_expense": [
+            "kvittering",  # nb/nn
+            "receipt expense",  # en
+            "quittung",  # de
+            "gasto de este recibo", "este recibo registrado",  # es
+            "dépense de ce reçu",  # fr
+            "despesa deste recibo",  # pt
+        ],
+    }
+
+    for task_type, keywords in COMPLEX_KEYWORDS.items():
+        for kw in keywords:
+            if not kw:
+                continue
+            if '.*' in kw or '\\' in kw or '[' in kw:
+                # Regex pattern
+                if re.search(kw, pl):
+                    return None  # Delegate to LLM
+            else:
+                # Simple substring match (faster)
+                if kw in pl:
+                    return None  # Delegate to LLM
 
     # === DEPARTMENT (check after complex patterns — "avdeling" appears in receipts too) ===
     if re.search(r'avdeling|department|abteilung|departamento|département', pl):
@@ -1582,7 +1699,7 @@ def handle_register_supplier_invoice(base_url, token, e):
     inv_date = e.get("invoiceDate") or today
     inv_due = e.get("invoiceDueDate") or e.get("dueDate") or str(date.today() + timedelta(days=30))
 
-    # Try 1: SI with inline voucher (NO amountCurrency — causes 500 in proxy)
+    # Try 1: SI with inline voucher using 2-posting format (vatType — Tripletex handles VAT)
     si_body = {
         "invoiceDate": inv_date,
         "invoiceDueDate": inv_due,
@@ -1591,7 +1708,7 @@ def handle_register_supplier_invoice(base_url, token, e):
         "voucher": {
             "date": inv_date,
             "description": f"Leverandorfaktura {e.get('invoiceNumber', '')} {e.get('supplierName', '')}".strip(),
-            "postings": si_postings,
+            "postings": si_postings,  # 2-posting with vatType (scored 5/10)
         },
     }
     if si_body.get("supplier") is None:
@@ -1602,7 +1719,13 @@ def handle_register_supplier_invoice(base_url, token, e):
 
     if st in (200, 201):
         val = resp.get("value", {})
-        print(f"  SI created: id={val.get('id')}")
+        print(f"  SI created: id={val.get('id')} amount={val.get('amount')} amountCurrency={val.get('amountCurrency')} voucherId={val.get('voucher',{}).get('id') if isinstance(val.get('voucher'),dict) else val.get('voucherId')}")
+        # Log voucher postings if available
+        voucher = val.get("voucher", {}) if isinstance(val.get("voucher"), dict) else {}
+        v_postings = voucher.get("postings", [])
+        for vp in v_postings[:5]:
+            acct = vp.get("account", {})
+            print(f"    posting: acct={acct.get('number','')} amount={vp.get('amount')} amountGross={vp.get('amountGross')} vatType={vp.get('vatType',{}).get('id') if isinstance(vp.get('vatType'),dict) else ''}")
         return True
 
     # Try 2: Without inline voucher (bare SI)
@@ -1650,14 +1773,36 @@ def handle_run_payroll(base_url, token, e):
         st_dob, _ = put_employee(base_url, token, emp_id, {"dateOfBirth": "1990-01-01"})
         print(f"set employee DOB: {st_dob}")
 
-    # Ensure employee has employment record (required for salary/transaction)
-    st_emp, emp_resp = tx_get(base_url, token, "/employee/employment", {"employeeId": emp_id, "fields": "id", "count": 1})
+    # Ensure employee has employment record WITH division (required for salary/transaction)
+    st_emp, emp_resp = tx_get(base_url, token, "/employee/employment", {"employeeId": emp_id, "fields": "id,division,version", "count": 1})
     existing_employment = emp_resp.get("values", [])
+
+    # Look up division (always — needed for new or existing employment)
+    _, div_resp = tx_get(base_url, token, "/division", {"count": 1})
+    div_vals = div_resp.get("values", [])
+    division_id = div_vals[0]["id"] if div_vals else None
+    print(f"division lookup: {len(div_vals)} found, id={division_id}")
+
+    # If existing employment lacks division, update it
+    if existing_employment:
+        emp_rec = existing_employment[0]
+        emp_div = emp_rec.get("division")
+        if not emp_div and division_id:
+            print(f"existing employment {emp_rec['id']} has no division — updating")
+            tx_put(base_url, token, f"/employee/employment/{emp_rec['id']}", {
+                "id": emp_rec["id"],
+                "version": emp_rec.get("version", 0),
+                "employee": {"id": emp_id},
+                "startDate": "2024-01-01",
+                "division": {"id": division_id},
+            })
+
     if not existing_employment:
         # Look up division (required for salary transactions)
         _, div_resp = tx_get(base_url, token, "/division", {"count": 1})
         div_vals = div_resp.get("values", [])
         division_id = div_vals[0]["id"] if div_vals else None
+        print(f"division lookup: {len(div_vals)} found, id={division_id}")
 
         emp_body = {
             "employee": {"id": emp_id},
@@ -1667,7 +1812,9 @@ def handle_run_payroll(base_url, token, e):
         }
         if division_id:
             emp_body["division"] = {"id": division_id}
+        print(f"employment body: {emp_body}")
         st_e, resp_e = tx_post(base_url, token, "/employee/employment", emp_body)
+        print(f"create employment: {st_e} id={resp_e.get('value',{}).get('id')} {str(resp_e)[:300] if st_e != 201 else ''}")
         employment_id = resp_e.get("value", {}).get("id")
         print(f"create employment: {st_e} id={employment_id} {str(resp_e)[:500] if st_e != 201 else ''}")
 
@@ -3561,7 +3708,7 @@ async def solve(request: Request):
         return JSONResponse({"status": "completed"})
 
 _request_start = 0.0
-REQUEST_TTL = 90  # seconds — competition token TTL estimate
+REQUEST_TTL = 300  # seconds — token doesn't seem to expire on time (237s task scored 7.5/10)
 
 def time_remaining():
     """Seconds remaining before token likely expires."""
@@ -3683,7 +3830,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-1045"
+BUILD_VERSION = "v20260322-1100"
 
 @app.get("/health")
 def health():
