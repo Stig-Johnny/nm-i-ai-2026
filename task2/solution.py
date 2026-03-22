@@ -2132,6 +2132,48 @@ def handle_bank_reconciliation(base_url, token, e):
                     })
                     print(f"supplier payment {tx_supp} amount={abs_amount}: {st_v} {str(resp_v)[:300] if st_v != 201 else ''}")
 
+        # After all payments registered, create bank reconciliation entity
+        try:
+            # Find bank account
+            _, ba_resp = tx_get(base_url, token, "/bankAccount", {"count": 1})
+            bank_accounts = ba_resp.get("values", [])
+            if bank_accounts:
+                bank_acct_id = bank_accounts[0]["id"]
+                # Find accounting period for the reconciliation
+                period_start = e.get("period", {}).get("startDate") or today
+                _, period_resp = tx_get(base_url, token, "/ledger/accountingPeriod", {
+                    "count": 12, "fields": "id,start,end"
+                })
+                periods = period_resp.get("values", [])
+                # Find matching period
+                period_id = None
+                for per in periods:
+                    p_start = per.get("start", {}).get("date", "") if isinstance(per.get("start"), dict) else str(per.get("start", ""))
+                    p_end = per.get("end", {}).get("date", "") if isinstance(per.get("end"), dict) else str(per.get("end", ""))
+                    if p_start <= period_start <= p_end:
+                        period_id = per["id"]
+                        break
+                if not period_id and periods:
+                    period_id = periods[0]["id"]
+
+                if period_id:
+                    # Create bank reconciliation
+                    recon_body = {
+                        "account": {"id": bank_acct_id},
+                        "accountingPeriod": {"id": period_id},
+                    }
+                    st_recon, resp_recon = tx_post(base_url, token, "/bank/reconciliation", recon_body)
+                    recon_id = resp_recon.get("value", {}).get("id")
+                    print(f"bank reconciliation: {st_recon} id={recon_id}")
+
+                    # Try auto-suggest matches
+                    if recon_id:
+                        st_sug, resp_sug = tx_put(base_url, token, "/bank/reconciliation/match/:suggest",
+                            params={"bankReconciliationId": recon_id})
+                        print(f"auto-suggest matches: {st_sug}")
+        except Exception as e_recon:
+            print(f"bank reconciliation entity error: {e_recon}")
+
         return True
 
     # Legacy: old-style bank reconciliation
@@ -3498,7 +3540,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0820"
+BUILD_VERSION = "v20260322-0830"
 
 @app.get("/health")
 def health():
