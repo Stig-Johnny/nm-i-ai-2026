@@ -536,7 +536,7 @@ def _parse_with_cli(full_prompt):
     """Parse using claude CLI subprocess."""
     try:
         result = subprocess.run(
-            [CLAUDE_PATH, "-p", "--model", "haiku", "--max-tokens", "512", SYSTEM_PROMPT],
+            [CLAUDE_PATH, "-p", "--model", "haiku", SYSTEM_PROMPT],
             input=full_prompt,
             capture_output=True, text=True, timeout=30
         )
@@ -3615,7 +3615,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0930"
+BUILD_VERSION = "v20260322-0940"
 
 @app.get("/health")
 def health():

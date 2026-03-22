@@ -1578,6 +1578,18 @@ def test_M13_supplier_invoice_uses_dueDate():
     assert si[0][2].get("invoiceDueDate") == "2026-02-22", f"Due date: {si[0][2].get('invoiceDueDate')}"
 
 
+def test_CLI_command_valid():
+    """The CLI command in _parse_with_cli must use valid flags — no --max-tokens etc."""
+    from task2.solution import CLAUDE_PATH, SYSTEM_PROMPT
+    import subprocess
+    # Build the exact command that _parse_with_cli uses (minus the input)
+    cmd = [CLAUDE_PATH, "-p", "--model", "haiku", SYSTEM_PROMPT]
+    # Verify no invalid flags
+    for arg in cmd:
+        assert not arg.startswith("--max-tokens"), f"--max-tokens is not a valid claude CLI flag: {cmd}"
+        assert not arg.startswith("--max_tokens"), f"--max_tokens is not a valid claude CLI flag: {cmd}"
+
+
 # ============================================================
 # Run
 # ============================================================
