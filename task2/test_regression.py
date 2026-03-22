@@ -1550,6 +1550,12 @@ def test_M11_nynorsk_month_end_not_payroll():
     assert plan is None, f"Nynorsk month-end should go to LLM, got {plan['task_type'] if isinstance(plan, dict) else plan}"
 
 
+def test_M12_bokmal_month_end_not_payroll():
+    """Bokmål månedsavslutning must NOT be run_payroll (scored 2/10)."""
+    plan = regex_parse('Utfør månedsavslutning for mars 2026. Periodiser forskuddsbetalt kostnad (11000 kr per måned fra konto 1720 til kostkonto). Bokfør månedlig avskrivning for et driftsmiddel med anskaffelseskost 67050 kr og levetid 5 år (lineær avskrivning til konto 6020). Kontroller at saldobalansen går i null. Bokfør også en lønnsavsetning (debet lønnskostnad konto 5000, kredit påløpt lønn konto 2900).')
+    assert plan is None, f"Bokmål month-end should go to LLM, got {plan['task_type'] if isinstance(plan, dict) else plan}"
+
+
 # ============================================================
 # Run
 # ============================================================
