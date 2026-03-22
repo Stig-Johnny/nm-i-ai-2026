@@ -1544,6 +1544,12 @@ def test_M10_spanish_hito_not_payment():
         assert plan["task_type"] != "register_payment", f"hito misclass as {plan['task_type']}"
 
 
+def test_M11_nynorsk_month_end_not_payroll():
+    """Nynorsk månavslutninga must NOT be run_payroll (scored 2/10)."""
+    plan = regex_parse('Gjer månavslutninga for mars 2026. Periodiser forskotsbetalt kostnad (11700 kr per månad frå konto 1720 til kostnadskonto). Bokfør månadleg avskriving for eit driftsmiddel med innkjøpskost 191700 kr og levetid 7 år (lineær avskriving til konto 6030). Kontroller at saldobalansen går i null. Bokfør også ei lønnsavsetjing (debet lønnskostnad konto 5000, kredit påløpt lønn konto 2900).')
+    assert plan is None, f"Nynorsk month-end should go to LLM, got {plan['task_type'] if isinstance(plan, dict) else plan}"
+
+
 # ============================================================
 # Run
 # ============================================================

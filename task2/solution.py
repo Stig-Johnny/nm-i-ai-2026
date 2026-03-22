@@ -225,7 +225,7 @@ def regex_parse(prompt):
         r'avstem|reconcil|abstimm|concili|rapprocher|bankutskrift|bank\s*statement|extrato\s*banc',  # bank reconciliation
         r'reverser|reverse|stornieren|annuler|anular|reverter|devolvido|retourné|returned.*bank',  # reverse voucher
         r'feil i hovedbok|errors? in.*ledger|fehler.*hauptbuch|errores.*libro.*mayor|erreurs.*grand.*livre|erros.*livro',  # ledger correction
-        r'årsoppgjør|year.end.*closing|jahresabschluss|monatsabschluss|cierre.*anual|clôture.*annuel|encerramento.*anual|månedsslutt|month.end.*closing|clôture.*mensuel|cierre.*mensual|encerramento.*mensal|rechnungsabgr',  # year-end/month-end
+        r'årsoppgjør|year.end.*closing|jahresabschluss|monatsabschluss|cierre.*anual|clôture.*annuel|encerramento.*anual|månedsslutt|månavslutn|month.end.*closing|clôture.*mensuel|cierre.*mensual|encerramento.*mensal|rechnungsabgr',  # year-end/month-end
         r'analysier|analyse.*hauptbuch|analyze.*ledger|analise.*livro|trois.*comptes|three.*accounts|drei.*konten',  # ledger analysis
         r'livssyklus|lifecycle|lebenszyklus|ciclo.*vida|cycle.*vie',  # project lifecycle
         r'valutadifferanse|exchange.*rate.*differ|wechselkurs|tipo.*cambio|taux.*change|taxa.*câmbio|agio|disagio',  # currency payment
@@ -3557,7 +3557,7 @@ async def _solve_inner(request: Request):
     return JSONResponse({"status": "completed"})
 
 
-BUILD_VERSION = "v20260322-0840"
+BUILD_VERSION = "v20260322-0845"
 
 @app.get("/health")
 def health():
