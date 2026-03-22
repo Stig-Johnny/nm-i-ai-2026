@@ -1590,6 +1590,36 @@ def test_CLI_command_valid():
         assert not arg.startswith("--max_tokens"), f"--max_tokens is not a valid claude CLI flag: {cmd}"
 
 
+def test_ALL_handler_aliases_valid():
+    """Every handler alias must point to a callable function."""
+    from task2.solution import HANDLERS
+    for name, func in HANDLERS.items():
+        assert callable(func), f"Handler '{name}' is not callable: {func}"
+
+
+def test_ALL_handler_aliases_exercise():
+    """Exercise every handler alias with minimal entities — must not crash."""
+    from task2.solution import HANDLERS, normalize_entities
+    mock = APIMock()
+    skip = {"delete_entity", "delete_customer", "delete_supplier", "delete_product",
+            "delete_project", "delete_invoice", "delete_travel_expense"}  # Delete handlers need real IDs
+    for name, func in HANDLERS.items():
+        if name in skip:
+            continue
+        entities = normalize_entities({"name": "Test", "employeeEmail": "test@test.no"})
+        try:
+            with patch('task2.solution.tx_get', mock.get), \
+                 patch('task2.solution.tx_post', mock.post), \
+                 patch('task2.solution.tx_put', mock.put), \
+                 patch('task2.solution.tx_delete', mock.delete):
+                func("https://mock/v2", "tok", entities)
+        except Exception as e:
+            # Some handlers may fail with minimal data — that's OK
+            # The point is they don't crash with NameError/ImportError/etc
+            if isinstance(e, (NameError, ImportError, SyntaxError, TypeError)):
+                raise AssertionError(f"Handler '{name}' has code error: {e}")
+
+
 # ============================================================
 # Run
 # ============================================================
